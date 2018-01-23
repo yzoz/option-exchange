@@ -1,0 +1,24 @@
+extends ../layout
+
+block content
+	- if (period == 'week') {
+		- var alt = 'ethereum bitcoin trading volume';
+		- var txt = 'Ethereum/Bitcoin Trading Volumes based on the difference between Sell and Buy market transactions on Poloniex exchange. Despite the fact that if somebody Sells anybody must Buy, in any event it\'s of the essence who has pushed the Button. So there\'s nothing to explain about symbolism of this Bubbles and opportunities for their application... Just remember that this is only an Illusion (:';
+	- }
+	- else {
+		- var alt = 'eth btc bubles';
+		- var txt = 'Good Luck!'; 
+	- }
+	h1= title
+	div(class='submenu')
+		a(href='full') Full
+		| &nbsp;|&nbsp; 
+		a(href='year') Year
+		| &nbsp;|&nbsp;
+		a(href='month4') 4 Months
+		| &nbsp;|&nbsp;
+		a(href='month') Month
+		| &nbsp;|&nbsp;
+		a(href='/info/bubbles/' + token + '/' + unit + '/') Week
+	img(src='/img/' + token + '-' + unit + '-bubbles-' + period + '.png' class='chart' alt=alt)
+	p= txt

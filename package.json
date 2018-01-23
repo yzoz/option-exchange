@@ -1,0 +1,19 @@
+{
+  "name": "yzoz",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "start": "nodemon ./bin/www"
+  },
+  "dependencies": {
+    "body-parser": "latest",
+    "cookie-parser": "latest",
+    "debug": "latest",
+    "express": "latest",
+    "less-middleware": "latest",
+    "morgan": "latest",
+    "pug": "latest",
+    "sentencer": "latest",
+    "serve-favicon": "latest"
+  }
+}

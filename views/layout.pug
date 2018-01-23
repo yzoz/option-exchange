@@ -1,0 +1,36 @@
+doctype html
+html
+	head
+		title= 'YZoZ :~: ' + title
+		link(rel='stylesheet', href='/stylesheets/style.css')
+		link(rel='stylesheet', href='/stylesheets/jquery-ui.css')
+		script(src='/javascripts/sha3.js')
+		script(src='/javascripts/jquery.js')
+		script(src='/javascripts/jquery-ui.js')
+	body
+		- if (appStatus == 'production') {
+			| <!-- Yandex.Metrika counter --> <script type="text/javascript"> (function (d, w, c) { (w[c] = w[c] || []).push(function() { try { w.yaCounter42435129 = new Ya.Metrika({ id:42435129, clickmap:true, trackLinks:true, accurateTrackBounce:true, webvisor:true, trackHash:true }); } catch(e) { } }); var n = d.getElementsByTagName("script")[0], s = d.createElement("script"), f = function () { n.parentNode.insertBefore(s, n); }; s.type = "text/javascript"; s.async = true; s.src = "https://mc.yandex.ru/metrika/watch.js"; if (w.opera == "[object Opera]") { d.addEventListener("DOMContentLoaded", f, false); } else { f(); } })(document, window, "yandex_metrika_callbacks"); </script> <noscript><div><img src="https://mc.yandex.ru/watch/42435129" style="position:absolute; left:-9999px;" alt="" /></div></noscript> <!-- /Yandex.Metrika counter -->
+		-}
+		header
+			div(id='menu')
+				span(id='exchange-menu')
+				a(href='/exchange/' title='Option Exchange') Bazaar
+				| &nbsp;|&nbsp;
+				a(href='/about/' title='About') WTF
+				| &nbsp;|&nbsp;
+				a(href='/info/' title='Market Info') Useful
+				| &nbsp;|&nbsp;
+				a(href='/about/faq/' title='FAQ')
+					strong Mayday
+				| &nbsp;|&nbsp;
+				a(href='/about/roadmap/' title='Roadmap') Сourse
+				| &nbsp;|&nbsp;
+				a(href='/about/ico/' title='ICO') Dole
+			a(href='/')
+				img(src='/images/logo.png' alt='YZoZ Crypto Trading')
+			div(id='counters') 
+		article
+			block content
+		footer
+			p
+				| BTC: 12345GksS3wy8sZ6Sokegxs9tMuykdfUsa | ETH: 0x12345287e1b76dd39a6ff162ea27e430d7dfca08 | WAVES: 3PPdu777vXKFGMPsL5BDTffng6KGuF62zmL | Letters: mail@yzoz.com

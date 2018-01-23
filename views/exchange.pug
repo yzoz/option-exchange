@@ -1,0 +1,138 @@
+extends layout
+
+block content
+	div(id='log')
+		div(class='header')
+			img(src='/images/close.png' class='show-hide icon' onclick='hideMe("#log")')
+		div(class='content')
+	h1= title
+	div(id='top')
+		div(id='signup' class='box reheight')
+			div(class='header')
+				img(src='/images/close.png' class='show-hide icon' onclick='hideMe("#signup")')
+				| Registration: 
+			div(class='content')
+				input(type='text' name='key' id='regKey' placeholder='Write You Key on Gen it' title='Somthing random, like a password' required='required')
+				br
+				textarea(name='seed' id='regSeed' placeholder='Think You Seed on Gen it' title='Secret phrase that You know, but incomprehensible to others' required='required')
+				br
+				input(type='text' name='email' id='regEmail' placeholder='E-mail (optional)' title='For My news or Your troubles')
+				div(class='buttons')
+					button(onclick='genKey()') Gen Key
+					button(onclick='genSeed()') Gen Seed
+					button(onclick='signUp()') Sign Up
+					a(href='/about/faq/') Help?
+		div(id='signin' class='box reheight')
+			div(class='header') Log In:
+			div(class='content')
+				input(type='text' name='key' id='userKey' placeholder='Key' title='Your Key')
+				br
+				input(type='password' name='user' id='userID' placeholder='Seed' title='Your secret phrase')
+				div(class='buttons')
+					button(onclick='userOrders()') Orders
+					button(onclick='userContracts()') Contracts
+					button(onclick='userTrades()') Trades
+					button(onclick='userBalances()') Balances
+		div(id='form' class='box')
+			div(class='header') Place Order:
+			div(class='content')
+				select(id='strike')
+					- for (var key in strikes) {
+						- strike = strikes[key]
+						option= strike
+					- }
+				label(class='call')
+					input(class='type' name='type' type='radio' value='C')
+					| &nbsp;CALL
+				label(class='put')
+					input(class='type' name='type' type='radio' value='P')
+					| &nbsp;PUT
+				br
+				input(id='price' type='number' name='price' placeholder='Price' title='in Satoshi' min='1')
+				br
+				input(id='quant' type='number' name='quant' placeholder='Quantity' title='in Wei' min='1')
+				div(class='buttons')
+					button(onclick='orderSend(\'buy\')' class='buy') Buy
+					button(onclick='orderSend(\'sell\')' class='sell') Sell
+		div(id='balances' class='box reheight')
+			div(class='header')
+				img(src='/images/close.png' class='show-hide icon' onclick='hideMe("#balances")')
+				| Balances
+			div(class='content')
+	div(id='main')
+		div(id='desk' class='box')
+			div(class='header' id='deskTitle')
+				span
+					span= date
+					| &nbsp;UTC&nbsp;~&nbsp;
+					span(class='question' title=size + '/' + measure)= name
+				| &nbsp;+&nbsp;
+				span(class='pseudoLink' title='Show order history' onclick='showMe("#orders")') O
+				| &nbsp;%&nbsp;
+				span(class='pseudoLink' title='Show trade history' onclick='showMe("#trades")') T
+			table(class='content')
+				tr
+					th ask
+					th
+					th bid
+					th theo
+					th last
+					th strike
+					th last
+					th theo
+					th bid
+					th
+					th ask
+				- for (var key in strikes) {
+					- strike = strikes[key]
+					- put = ticker + '_' + exp + '_' + strike + '_P'
+					- call = ticker + '_' + exp + '_' + strike + '_C'
+					tr
+						td(id=call + '_sell' class='price call')
+						td(class='call')
+							img(src='/images/book.png' onclick='orderBook(\''+call+'\')' class='icon')
+						td(id=call + '_buy' class='price call')
+						td(id=call + '_theo' class='theo call')
+						td(id=call + '_last' class='last call')
+						td(class='strike')= strike
+						td(id=put + '_last' class='last put')
+						td(id=put + '_theo' class='theo put')
+						td(id=put + '_buy' class='price put')
+						td(class='put')
+							img(src='/images/book.png' onclick='orderBook(\''+put+'\')' class='icon')
+						td(id=put + '_sell' class='price put')
+				- }
+		div(id='orders' class='box reheight')
+			div(class='header')
+				img(src='/images/close.png' class='show-hide icon' onclick='hideMe("#orders")')
+				| Order History
+			div(class='content')
+		div(id='trades' class='box reheight')
+			div(class='header')
+				img(src='/images/close.png' class='show-hide icon' onclick='hideMe("#trades")')
+				| Trade History
+			div(class='content')
+		div(id='my-orders' class='box reheight')
+			div(class='header')
+				img(src='/images/close.png' class='show-hide icon' onclick='hideMe("#my-orders")')
+				| My Orders
+			div(class='content')
+		div(id='my-contracts' class='box reheight')
+			div(class='header')
+				img(src='/images/close.png' class='show-hide icon' onclick='hideMe("#my-contracts")')
+				| My Contracts
+			div(class='content')
+		div(id='my-trades' class='box reheight')
+			div(class='header')
+				img(src='/images/close.png' class='show-hide icon' onclick='hideMe("#my-trades")')
+				| My Trades
+			div(class='content')
+		div(id='order-book' class='box reheight')
+			div(class='header')
+				img(src='/images/close.png' class='show-hide icon' onclick='hideMe("#order-book")')
+				span(class='title')
+			div(class='content')
+	div(id='start')
+		input(id='ticker' value=ticker)
+		input(id='exp' value=exp)
+	script(src='/javascripts/exchange.js')

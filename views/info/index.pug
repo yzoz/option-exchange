@@ -1,0 +1,35 @@
+extends ../layout
+
+block content
+	h1= title
+
+	h2 Bubbles
+	div(class='submenu')
+		a(href='/info/bubbles/' + token + '/' + unit + '/full') Full
+		| &nbsp;|&nbsp; 
+		a(href='/info/bubbles/' + token + '/' + unit + '/year') Year
+		| &nbsp;|&nbsp;
+		a(href='/info/bubbles/' + token + '/' + unit + '/month4') 4 Months
+		| &nbsp;|&nbsp;
+		a(href='/info/bubbles/' + token + '/' + unit + '/month') Month
+	img(src='/img/' + token + '-' + unit + '-bubbles-week.png' class='chart' alt='ethereum bitcoin trading volume')
+
+	h2 Accumulation/Distribution
+	div(class='submenu')
+		a(href='/info/ac/' + token + '/' + unit + '/full') Full
+		| &nbsp;|&nbsp; 
+		a(href='/info/ac/' + token + '/' + unit + '/year') Year
+		| &nbsp;|&nbsp;
+		a(href='/info/ac/' + token + '/' + unit + '/month4') 4 Months
+		| &nbsp;|&nbsp;
+		a(href='/info/ac/' + token + '/' + unit + '/month') Month
+	img(src='/img/' + token + '-' + unit + '-ac-week.png' class='chart' alt='ethereum bitcoin accumulation distribution')
+
+	h2 Historical Volatility
+	div(class='submenu')
+		a(href='/info/volatility/' + token + '/' + unit + '/90') 90
+		| &nbsp;|&nbsp;
+		a(href='/info/volatility/' + token + '/' + unit + '/60') 60
+		| &nbsp;|&nbsp;
+		a(href='/info/volatility/' + token + '/' + unit + '/30') 30
+	img(src='/img/' + token + '-' + unit + '-volatility-7.png' class='chart' alt='ethereum bitcoin volatility')

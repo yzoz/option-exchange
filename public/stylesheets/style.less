@@ -1,0 +1,106 @@
+@import url('https://fonts.googleapis.com/css?family=Inconsolata|Roboto');
+
+@border: 1px #000 solid;
+@green: #00990C;
+@medium-green: #61A859;
+@light-green: #AEE5C7;
+@red: #BC1C00;
+@medium-red:#DB3F36;
+@light-red:#FF778C;
+@shift: 1em;
+@small-shift: 0.5em;
+@smallest-shift: 0.25em;
+@xx-shift: 0.1em;
+@major: #000;
+@minor:#FFF;
+@middle: #CCC;
+@big: 1.5em;
+@medium: 1.25em;
+@small: 0.85em;
+@xsmall: 0.66em;
+@smallest: 0.6em;
+@market: Inconsolata, Tahoma, sans-serif;
+@terminal: Roboto, Courier New, Courier, monospace;
+@mainface: Georgia, 'Times New Roman', Times, serif;
+@round: 4px;
+@bold: 600;
+
+html * {margin: 0; padding: 0}
+body{padding: @shift; font-family: @mainface}
+header{border-bottom: @border; padding-bottom: @shift; margin-bottom: @shift; position: relative}
+footer{border-top: @border; padding-top: @shift; margin-top: @shift; clear:both}
+footer p{font-size:@small}
+
+a, .pseudoLink{color: @major}
+.pseudoLink{text-decoration: underline; cursor: pointer}
+a:hover, .pseudoLink:hover{text-decoration: none}
+.question{border-bottom: 1px @minor dotted; cursor: help}
+
+h1{margin-bottom: @shift; font-size: @big}
+h2{margin: @shift 0 @small-shift 0; font-size: @medium}
+p{margin-bottom: @smallest-shift}
+li{list-style-position: inside}
+
+input[type=text], input[type=number], input[type=password], textarea, select{width:25em; font-size:@small; border:2px @light-green solid; border-radius: @round; padding:@smallest-shift; margin:@small-shift 0; font-family: @terminal; box-sizing: border-box}
+input[type=text]:focus, input[type=number]:focus, input[type=password]:focus, textarea:focus, select:focus{border-color:@light-red}
+input[disabled=disabled]{background: @middle}
+select{width:10em}
+textarea{resize: none}
+button{background: @major; color: @minor; padding: @small-shift; font-size:@small; border-width:2px; border-style: solid; border-color: @major; border-radius: @round; font-family: @terminal; cursor: pointer; margin-right: @small-shift}
+button.buy{background: @medium-green; border-color: @green}
+button.sell{background: @medium-red; border-color: @red}
+button:hover{background: @minor; color: @major}
+label.put{color: @red}
+label.call{color: @green}
+
+.box{float: left; margin: 0 @shift @shift 0}
+.box table td{padding:0 @xx-shift}
+
+#signin .content{position: relative}
+#signin .content .buttons{position: absolute; bottom: 0; left: 0}
+
+#form label{font-weight: @bold; margin-left:@small-shift}
+
+#main .buy{color: @medium-green}
+#main .sell{color: @medium-red}
+
+.header{background: @major; color: @minor; padding: @small-shift @smallest-shift; font-size: @small; font-family: @mainface}
+.header .pseudoLink{color:@minor}
+
+.icon{cursor: pointer; padding:0 @smallest-shift}
+.show-hide{float: right; padding-left:@shift}
+
+.my{font-weight: bold}
+
+.chart{max-width: 100%}
+
+#menu{float: right}
+.submenu{font-size: @small}
+#counters{position: absolute; right: 0; bottom: 0}
+
+#form{font-family: @terminal}
+
+#orders .content, #trades .content, #my-orders .content, #my-contracts .content, #my-trades .content, #order-book .content, #balances .content{overflow-y: scroll; font-size:@smallest; font-family: @terminal}
+
+#main .reheight .content{height:400px}
+
+#log, #my-contracts, #my-orders, #order-book, #my-trades, #balances, #start, #signup, #signin, #form{display: none}
+
+#log{position: absolute; z-index: 9999; border: @shift @middle solid; border-radius: @round; background: @major}
+#log .content{padding: @shift; color: @minor}
+
+#order-book table{width:100%}
+#order-book .content{font-family: @market; font-size: @xsmall}
+#order-book table td{padding: @xx-shift @small-shift}
+#order-book .buy{background: @light-green; color:@major}
+#order-book .sell{background: @light-red; color:@major}
+
+#main:after, #top:after{content: ''; display: block; clear: both}
+
+#desk{float:left}
+#desk .content{font-size:@small; font-family: @market}
+#desk .strike{text-align: center}
+#desk .put{background: @light-red}
+#desk .call{background: @light-green}
+#desk button{font-weight: @bold}
+#desk .price, #desk .last, #desk .theo{padding: 0 @smallest-shift}
