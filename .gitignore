@@ -1,0 +1,13 @@
+.vscode/
+node_modules/
+public/img/
+public/.well-known
+_cache/
+_go/
+_set/
+api/__pycache__
+api/inc/__pycache__
+jsconfig.json
+sync
+*.log
+*.css
