@@ -31,10 +31,14 @@ import schedule
 # относительно каталога api/.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from inc.mc import loadCatalog, rebuildCache, setCurrent, setHV, setTheo
+from inc.mc import loadCatalog, rebuildCache, setCurrent, setHV, setTheo, getTickers, _mcGet
 from inc.settings import storageStatus, formatStorageStatus
 
 HV_INTERVAL_MIN = 15
+
+# Последняя цена, по которой для тикера считался THEO. Позволяет не гонять
+# полный пересчёт Блэка-Шоулза, если цена не изменилась (задача ТЗ #30).
+_lastPrice = {}
 
 
 def warn_storage(stage):
@@ -46,15 +50,38 @@ def warn_storage(stage):
 
 
 def tick():
-    """Ежеминутный пересчёт цены и теоретических цен."""
+    """Ежеминутный пересчёт цены и теоретических цен.
+
+    THEO пересчитывается только для тикеров, у которых цена изменилась с
+    прошлого тика (задача ТЗ #30). Сам пересчёт нужен и после смены HV —
+    вызывающий сбрасывает историю цен при обновлении волатильности.
+    """
     try:
-        setCurrent()
-        setTheo()
-        print('[theo] %s: PRICE + THEO обновлены' % time.strftime('%Y-%m-%d %H:%M:%S'), flush=True)
+        prices = setCurrent() or {}
+        changed = []
+        for ticker in (getTickers() or []):
+            price = prices.get(ticker, _mcGet('PRICE_' + ticker))
+            if price != _lastPrice.get(ticker):
+                setTheo(ticker)
+                _lastPrice[ticker] = price
+                changed.append(ticker)
+        print('[theo] %s: PRICE обновлён, THEO пересчитан (%s)'
+              % (time.strftime('%Y-%m-%d %H:%M:%S'), ', '.join(changed) or 'без изменений'),
+              flush=True)
     except Exception as e:
         # Разовая ошибка (например, мигнул Memcached/Mongo) не должна убивать
         # долгоживущий процесс — следующий тик попробует снова (задача #25).
         print('[theo] tick пропущен: %s' % e, flush=True)
+
+
+def refreshHV():
+    """Обновить волатильность и заставить пересчитать THEO на следующем тике.
+
+    После смены HV прежний THEO перестаёт быть верным, поэтому сбрасываем
+    историю цен — ближайший tick() пересчитает THEO для всех тикеров.
+    """
+    setHV()
+    _lastPrice.clear()
 
 
 def rebuild():
@@ -63,6 +90,7 @@ def rebuild():
     warn_storage('старт')
     loadCatalog()
     rebuildCache()
+    _lastPrice.clear()
     print('[theo] кэш пересобран', flush=True)
 
 
@@ -72,7 +100,7 @@ def main():
         return 0
     rebuild()
     schedule.every(1).minutes.do(tick)
-    schedule.every(HV_INTERVAL_MIN).minutes.do(setHV)
+    schedule.every(HV_INTERVAL_MIN).minutes.do(refreshHV)
     print('[theo] планировщик запущен: PRICE/THEO — 1 мин, HV — %d мин' % HV_INTERVAL_MIN,
           flush=True)
     while True:

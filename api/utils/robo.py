@@ -1,6 +1,6 @@
 import os
 import time
-from inc.mc import bybitGet, bybitSymbol
+from inc.mc import bybitGet
 from inc.settings import indb, ROOT, CACHE_DIR
 from inc.utils import fromTS
 import numpy as np
@@ -58,7 +58,8 @@ def getTrades(token, unit, exchange):
     price = 0
     for row in rows:
         times = int(row[0] / 1000)
-        o, h, l, c, v = row[1], row[2], row[3], row[4], row[5]
+        # h/l (high/low) для A/D не нужны — берём только open/close/volume.
+        o, _h, _l, c, v = row[1], row[2], row[3], row[4], row[5]
         # Для графика Accumulation/Distribution объём относим к «покупкам»,
         # если свеча закрылась выше открытия, иначе — к «продажам».
         buy = int(v) if c >= o else 0

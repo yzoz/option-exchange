@@ -228,7 +228,10 @@ def scenario_matching():
 
     t1 = threading.Thread(target=buy, args=('b2', b2))
     t2 = threading.Thread(target=buy, args=('c2', c2))
-    t1.start(); t2.start(); t1.join(); t2.join()
+    t1.start()
+    t2.start()
+    t1.join()
+    t2.join()
     deals = sum(1 for r in results.values() if 'Deal' in r)
     check('ровно один матч на 10', deals == 1, str(results))
     check('A2 позиция -10 (не -20)', has_quant(a2.ask('contracts'), -10), a2.ask('contracts'))
@@ -398,6 +401,54 @@ def scenario_web_health():
         check('web /health видит API', body.get('api', {}).get('status') == 'ok', str(body))
 
 
+def scenario_theo_targeted():
+    """Задача #30: setTheo(ticker) пересчитывает только указанный тикер.
+
+    Вызываем пересчёт напрямую (то, что делает планировщик при изменении цены)
+    и проверяем, что THEO серии заполнен. Это не HTTP-контракт, а защита от
+    регрессии оптимизации: сигнатура с необязательным тикером и заполнение кэша.
+    """
+    print('[13] setTheo(ticker) — точечный пересчёт THEO (#30)')
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'api'))
+    try:
+        from inc.mc import setTheo
+    except ImportError as e:
+        check('import inc.mc.setTheo', False, str(e))
+        return
+    try:
+        setTheo(TICKER)
+        ok = True
+        err = ''
+    except Exception as e:
+        ok = False
+        err = str(e)
+    check('setTheo(TICKER) без ошибок', ok, err)
+    theo = json.loads(_get('/theo/%s/%s' % (TICKER, EXP)))
+    check('THEO заполнен после точечного пересчёта', len(theo) > 0 and all(
+        row['theo'] is not None for row in theo), str(theo[:2]))
+
+
+def scenario_frontend_assets():
+    """Задачи #26/#32/#35: обновлённые ресурсы и отсутствие битой ссылки.
+
+    Проверяем статически отданный веб-слоем контент: строгий режим в exchange.js,
+    актуальную версию jQuery и отсутствие ссылки на несуществующий
+    jquery-ui.css в HTML стола. Отключается E2E_WEB=0.
+    """
+    if os.getenv('E2E_WEB', '1') == '0':
+        print('[14] фронтенд-ресурсы — пропущен (E2E_WEB=0)')
+        return
+    print('[14] фронтенд-ресурсы (#26 strict, #32 ссылка, #35 jQuery)')
+    page = _get_url(WEB + '/exchange/eth/btc/' + EXP)
+    check('стол -> 200', page.startswith('<!DOCTYPE') or 'YZoZ' in page, str(page)[:80])
+    check('страница не грузит отсутствующий jquery-ui.css (#32)',
+          '/stylesheets/jquery-ui.css' not in page, 'битая ссылка присутствует')
+    ex = _get_url(WEB + '/javascripts/exchange.js')
+    check('exchange.js в strict mode (#26)', "'use strict'" in ex, str(ex)[:80])
+    jq = _get_url(WEB + '/javascripts/jquery.js')
+    check('jQuery обновлён до 3.x (#35)', 'jQuery v3.' in jq, str(jq)[:80])
+
+
 def main():
     print('E2E против %s' % API)
     # Дождаться чистой квоты rate-лимитера: сценарий rate-limit в конце
@@ -417,6 +468,8 @@ def main():
     scenario_health()
     scenario_market_endpoints()
     scenario_web_health()
+    scenario_theo_targeted()
+    scenario_frontend_assets()
     scenario_rate_limit()
 
     print('\nИтог: %d проверок, %d провалов' % (_checks, len(_failures)))

@@ -10,7 +10,7 @@ API_LOG ?= /tmp/opencode/oe-api.log
 THEO_LOG ?= /tmp/opencode/oe-theo.log
 WEB_LOG ?= /tmp/opencode/oe-web.log
 
-.PHONY: help env storage up down logs e2e test check docker-up docker-down docker-logs
+.PHONY: help env storage up down logs e2e test check lint lint-js lint-py format docker-up docker-down docker-logs
 
 help: ## Показать этот список
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -50,6 +50,18 @@ check: ## Быстрые проверки синтаксиса (Python + JS) и 
 	node --check app.js && node --check bin/www && node --check routes/*.js && node --check lib/*.js && node --check public/javascripts/exchange.js
 	docker compose config --quiet
 	@echo "check: ok"
+
+lint: lint-py lint-js ## Линтеры (ruff для Python, ESLint для JS)
+
+lint-py: ## Линтер Python (ruff, конфиг ruff.toml)
+	ruff check .
+
+lint-js: ## Линтер JS (ESLint, конфиг .eslintrc.json); нужен npm install
+	npx eslint "app.js" "bin/www" "routes/**/*.js" "lib/**/*.js" "public/javascripts/exchange.js"
+
+format: ## Форматирование (prettier для JS; ruff --fix для Python)
+	npx prettier --write "app.js" "bin/www" "routes/**/*.js" "lib/**/*.js" "public/javascripts/exchange.js"
+	ruff check . --fix
 
 docker-up: env ## Поднять весь стек в контейнерах (compose-профиль app)
 	docker compose --profile app up -d --build

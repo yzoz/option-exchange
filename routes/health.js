@@ -9,43 +9,53 @@
 var express = require('express')
 var http = require('http')
 var https = require('https')
-var urllib = require('url')
 
 var router = express.Router()
 var API_URL = process.env.API_URL || 'http://localhost:6969'
 
 function probeApi(callback) {
-	var target = urllib.parse(API_URL + '/health')
-	var lib = target.protocol === 'https:' ? https : http
-	var req = lib.get({
-		hostname: target.hostname,
-		port: target.port || (target.protocol === 'https:' ? 443 : 80),
-		path: target.path,
-		timeout: 3000
-	}, function (res) {
-		var body = ''
-		res.on('data', function (chunk) { body += chunk })
-		res.on('end', function () {
-			try {
-				callback(null, JSON.parse(body))
-			} catch (e) {
-				callback('API ответил не-JSON (HTTP ' + res.statusCode + ')')
-			}
-		})
-	})
-	req.on('timeout', function () { req.destroy(new Error('таймаут')) })
-	req.on('error', function (err) { callback(err.message) })
+  // WHATWG URL вместо устаревшего url.parse() (DEP0169). У WHATWG-URL путь —
+  // это pathname + search (у старого url.parse был .path).
+  var target = new URL(API_URL + '/health')
+  var lib = target.protocol === 'https:' ? https : http
+  var req = lib.get(
+    {
+      hostname: target.hostname,
+      port: target.port || (target.protocol === 'https:' ? 443 : 80),
+      path: target.pathname + target.search,
+      timeout: 3000
+    },
+    function (res) {
+      var body = ''
+      res.on('data', function (chunk) {
+        body += chunk
+      })
+      res.on('end', function () {
+        try {
+          callback(null, JSON.parse(body))
+        } catch (e) {
+          callback('API ответил не-JSON (HTTP ' + res.statusCode + ')')
+        }
+      })
+    }
+  )
+  req.on('timeout', function () {
+    req.destroy(new Error('таймаут'))
+  })
+  req.on('error', function (err) {
+    callback(err.message)
+  })
 }
 
 router.get('/', function (req, res) {
-	probeApi(function (err, api) {
-		var status = err ? 'degraded' : (api.status || 'ok')
-		res.json({
-			status: status,
-			web: { status: 'ok', port: req.socket.localPort },
-			api: err ? { status: 'down', error: err } : api
-		})
-	})
+  probeApi(function (err, api) {
+    var status = err ? 'degraded' : api.status || 'ok'
+    res.json({
+      status: status,
+      web: { status: 'ok', port: req.socket.localPort },
+      api: err ? { status: 'down', error: err } : api
+    })
+  })
 })
 
 module.exports = router

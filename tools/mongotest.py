@@ -12,9 +12,14 @@ API. По умолчанию он ничего не делает — нужно 
 задачей ТЗ #22 именно потому, что он не является автотестом.
 """
 
-from pymongo import MongoClient
 from bson.objectid import ObjectId
-import os, sys, time, random, json, math, requests
+import os
+import sys
+import time
+import random
+import json
+import math
+import requests
 
 # Креды/хост — из .env через настройки API (хардкод ''/'' убран).
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'api'))
@@ -71,7 +76,7 @@ def getAll(type, asset):
     for doc in cursor:
         res.append({'user': doc['user'], 'quant': doc['quant'], 'price': doc['price'], 'time': doc['time']})
     print(json.dumps(res, indent=1))
-        
+
 def getLimit(type, asset, price):
     if (type == 'sell'):
         dir = '$lte'
@@ -100,12 +105,12 @@ def sendLimit(user, type, quant, asset, price):
     }).inserted_id
     if (cursor):
         return 'SendLimit: ' + str(times) + ' | ' + str(user) + ' | ' + type + ' | ' + str(quant) + ' | ' + asset + ' | ' + str(price) + '\n'
-    
+
 def editQuant(id, quant):
     cursor = orders.update_one({'_id': id}, {'$set': {'quant': quant}}).modified_count
     if (cursor == 1):
         return 'Edit: ' + str(cursor) + '\n'
-    
+
 def removeOrder(id):
     cursor = orders.delete_one({'_id': id}).deleted_count
     if (cursor == 1):
@@ -168,6 +173,7 @@ def sendOrder(sex, user, type, quant, asset, price):
 
 def postOrders():
     orders.drop()
+    times = time.time()
     K = 2500
     i = 0
     T = 'C'
@@ -261,7 +267,7 @@ def testOrders():
             print(send.text)
         time.sleep(1)
         i=+1
-        
+
 if __name__ == '__main__':
     # Безопасный дефолт: ничего деструктивного не запускаем, пока явно не
     # попросили `--run` (задача ТЗ #22 — раньше `testOrders()` вызывался при

@@ -1,0 +1,28 @@
+# Единый стиль для всех редакторов (задача ТЗ #27).
+# Подробности — docs/DEVELOPER_GUIDE.md §9.
+
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 2
+
+[*.py]
+indent_size = 4
+
+[*.{js,json,yml,yaml,pug,less,css}]
+indent_size = 2
+
+[*.md]
+# В markdown двойной пробел в конце строки — значимый перенос.
+trim_trailing_whitespace = false
+
+[Makefile]
+indent_style = tab
+
+[*.{png,jpg,jpeg,gif,ico}]
+insert_final_newline = false

@@ -2,7 +2,6 @@ from .settings import modb
 from .contracts import getContracts, alreadyContracts
 from .utils import splitAsset
 from .mc import getCurrencys
-import math
 
 orders = modb().orders
 users = modb().users

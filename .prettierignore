@@ -1,0 +1,9 @@
+node_modules/
+.venv/
+package-lock.json
+public/javascripts/jquery.js
+public/javascripts/jquery-ui.js
+public/javascripts/sha3.js
+public/stylesheets/style.css
+_cache/
+docs/

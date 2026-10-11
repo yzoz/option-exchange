@@ -1,6 +1,10 @@
 # RUNBOOK — как поднять YZoZ Option Exchange с нуля
 
-> **Статус документа.** Обновлён после Этапа 2 ТЗ (задачи 20–25): запуск через
+> **Статус документа.** Обновлён после Этапа 3 ТЗ (задачи 26–35): линтеры
+> (`make lint`/`format`, ESLint+Prettier, ruff), `.editorconfig`, лицензия MIT,
+> обновлены jQuery/jQuery UI, клиентская валидация и AJAX-ошибки, защита от
+> деления на ноль, оптимизация пересчёта THEO.
+> Ранее — после Этапа 2 ТЗ (задачи 20–25): запуск через
 > `make up/down/logs/e2e` (+ `Procfile`, + compose-профиль `app` — весь стек в
 > контейнерах), healthcheck `/health` у API и веб-слоя, graceful-поведение при
 > недоступных хранилищах (503 вместо падения импорта), вынос логики из роутов в
@@ -32,7 +36,8 @@ open http://localhost:3000/exchange/      # HV/Price должны заполни
 `make up` поднимает Mongo/Memcached/InfluxDB (Docker), Python API, планировщик
 `api/theo.py` и Node-веб локальными процессами; `make down` их останавливает,
 `make logs` показывает логи, `make help` — все цели. Весь стек в контейнерах:
-`make docker-up` (compose-профиль `app`).
+`make docker-up` (compose-профиль `app`). Проверка кода — `make check`
+(синтаксис) и `make lint` (ruff + ESLint); форматирование — `make format`.
 
 Эквивалент вручную:
 
@@ -281,13 +286,29 @@ curl -s localhost:3000/health     # веб-слой + API (задача #24)
 503** с понятным JSON, а не падают. Проверка кэшируется на `STORAGE_PROBE_TTL`
 сек; таймауты — `MONGO_SELECT_TIMEOUT`, `INFLUX_TIMEOUT`.
 
+### Линтеры и форматтеры (задача #27)
+
+```bash
+make check        # быстрый синтаксис: py_compile + node --check + compose config
+make lint         # ruff (Python) + ESLint (JS)
+make lint-py      # только ruff
+make lint-js      # только ESLint (нужен npm install)
+make format       # prettier --write + ruff --fix
+```
+
+- **Python** — `ruff` (конфиг `ruff.toml`: реальные ошибки `E4/E7/E9/F/W`,
+  осознанно без модернизации). Установка: `pip install ruff` (или `uvx ruff`).
+- **JS** — ESLint (`.eslintrc.json`) + Prettier (`.prettierrc.json`); входят в
+  `devDependencies`, ставятся обычным `npm install`.
+- **Стиль редактора** — `.editorconfig`.
+
 ### В браузере
 
 1. `http://localhost:3000/` — лендинг.
 2. `http://localhost:3000/exchange/` — торговый стол. В правом верхнем углу
    должны появиться **HV** и **Price** (значит фронт достучался до API).
-3. `http://localhost:3000/info/eth/btc/` — аналитика (картинки графиков могут
-   отсутствовать — задача ТЗ #32).
+3. `http://localhost:3000/info/eth/btc/` — аналитика (картинки графиков — пока
+   заглушки/404: генерация PNG ещё не реализована, раздел «На будущее» в SPEC).
 
 ### Сквозной сценарий через API (без браузера)
 
@@ -331,8 +352,7 @@ print(post('/user', {'user': KEY, 'password': PW, 'hmac': mac('balances'),
 | `ModuleNotFoundError: memcache` | не та библиотека | `pip install python-memcached` |
 | `mongo` не подключается | контейнер не готов / не те креды | `docker ps`, ждать ~5 c, сверить `.env` |
 | `docker: permission denied` | нет прав на docker | добавить пользователя в группу `docker` |
-| Графики 404 на `/info/*` | `public/img/*` не сгенерированы | нормально (ТЗ #32) |
-| `jquery-ui.css` 404 | файл в `.gitignore` | нормально (ТЗ #33) |
+| Графики 404 на `/info/*` | `public/img/*` не сгенерированы (`robo.py` не запускали) | нормально; см. §11 / «На будущее» в SPEC |
 | Стол открылся, но **BEST/THEO/LAST пустые**, при живом `PRICE`/`HV` | API перезапущен на «холодном» Memcached (кэш не переживает рестарт) | перезапустить API (пересборка при старте, #19) или запустить `api/theo.py` |
 | `/exchange/` редиректит на неизвестную серию / 404 на столе | серия из `instruments.json` устарела | обновить серии (#17) и перезапустить веб-слой |
 | Стол открылся, но **PRICE = null** | нет `_cache` и нет доступа к Bybit | проверить сеть (§4) |
@@ -393,7 +413,7 @@ done
 
 ---
 
-## 11. Генерация графиков (`robo.py`, задача #32)
+## 11. Генерация графиков (`robo.py`)
 
 `api/utils/robo.py` — отдельный скрипт (не входит в рантайм API). Он тянет
 свечи с Bybit, пишет историю в InfluxDB `spot` и строит PNG в `public/img/`.
@@ -405,7 +425,8 @@ cd api && python utils/robo.py
 
 🪨 Требует `matplotlib` (нет в `requirements.txt` — тяжёлая зависимость, нужна
 только для графиков): `pip install matplotlib`. `numpy` придёт с `scipy`/`pandas`.
-Полноценная генерация графиков для `/info/*` — вне текущего блока (ТЗ #32).
+Полноценная генерация графиков для `/info/*` — в блоке «На будущее» (SPEC), вне
+текущей работы.
 
 ---
 
@@ -425,4 +446,6 @@ cd api && python utils/robo.py
 - `"latest"` в `package.json` → фиксированные версии Express 4.x (#9);
 - креды `ad`/`pass` в коде/истории → `.env` + ротация + чистка истории (#12).
 
-Осталось из ТЗ: **#26–#36** (Этап 3 P2). Полный список — `docs/SPEC.md`.
+Этап 3 (**#26–#35**) закрыт — см. `docs/DONE.md`. Открытые пункты — блок
+«На будущее» в `docs/SPEC.md` (админ-генерация серий, Memcached→Redis, автотесты
+дополнительно, CI, бэкапы, генерация графиков).

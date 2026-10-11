@@ -3,6 +3,8 @@ node_modules/
 .env
 .venv/
 __pycache__/
+.ruff_cache/
+.eslintcache
 public/img/
 public/.well-known
 _cache/

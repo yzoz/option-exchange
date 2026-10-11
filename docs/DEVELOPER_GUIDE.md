@@ -131,7 +131,8 @@
 | Кэш/ускорение | Memcached — цены, волатильность, теоретические цены, состояние |
 | Расчёты | numpy, scipy, pandas, matplotlib (графики) |
 | Планировщик | `api/theo.py` — отдельный долгоживущий сервис (`schedule`), пересчитывает PRICE/THEO/HV |
-| Оркестрация | `make up/down/logs/e2e/check` (+ `Procfile`, + compose-профиль `app` — весь стек в контейнерах) |
+| Оркестрация | `make up/down/logs/e2e/check/lint/format` (+ `Procfile`, + compose-профиль `app` — весь стек в контейнерах) |
+| Качество кода | ESLint + Prettier (JS), ruff (Python), `.editorconfig` (задача #27) |
 
 ---
 
@@ -145,10 +146,12 @@ option-exchange/
 ├── bin/www                    # Точка входа Node: создание HTTP(S)-сервера, порты
 ├── package.json               # Зависимости Node (версии зафиксированы: Express 4.x, см. §9)
 ├── requirements.txt           # Зависимости Python-API (в т.ч. python-dotenv, ecdsa)
-├── Makefile                   # make up/down/logs/e2e/check/docker-* (задача #21)
+├── Makefile                   # make up/down/logs/e2e/check/lint/format/docker-* (#21, #27)
 ├── Procfile                   # процессы api/theo/web для process-manager'ов (#21)
 ├── docker-compose.yml         # хранилища; профиль «app» — весь стек в контейнерах
 ├── .dockerignore              # не тащить в образы .env/node_modules/... (#21)
+├── .editorconfig              # единый стиль редакторов (#27)
+├── ruff.toml / .eslintrc.json / .prettierrc.json  # линтеры/форматтеры (#27)
 ├── docker/
 │   ├── influx-init.iql        # Автосоздание баз orders/trades/spot (init-скрипт InfluxDB)
 │   ├── api.Dockerfile         # образ Python API + планировщик (профиль «app»)
@@ -156,7 +159,7 @@ option-exchange/
 ├── .env.example / .env        # Конфиг (.env не коммитится) — см. §7
 ├── nodemon.json               # Настройки nodemon (dev-режим)
 ├── README.md                  # назначение, схема, формат asset, запуск (задача #20)
-├── LICENCE                    # GPLv3 (планируется смена на MIT, задача #28)
+├── LICENCE                    # MIT (задача #28)
 ├── .gitignore                 # игнорирует node_modules/, public/img/, _cache/, .env, *.css ...
 ├── docs/                      # SPEC.md (ТЗ), DEVELOPER_GUIDE.md, RUNBOOK.md, DONE.md, screenshot.png
 │
@@ -183,9 +186,9 @@ option-exchange/
 │   ├── favicon.ico
 │   ├── images/                #   logo, иконки, trading.jpg (карты генерируются в img/, он в .gitignore)
 │   ├── javascripts/
-│   │   ├── exchange.js        #   ! ВСЯ клиентская логика торговли (AJAX к API)
-│   │   ├── jquery.js          #   локальная копия jQuery (~2018)
-│   │   ├── jquery-ui.js       #   локальная копия jQuery UI (~2018)
+│   │   ├── exchange.js        #   ! ВСЯ клиентская логика торговли (AJAX к API); 'use strict' (#26)
+│   │   ├── jquery.js          #   jQuery 3.7.1 (#35)
+│   │   ├── jquery-ui.js       #   jQuery UI 1.13.3 (виджеты не используются; CSS не грузим, #32)
 │   │   └── sha3.js            #   jsSHA — HMAC-SHA3-512 подпись запросов
 │   └── stylesheets/
 │       └── style.less         #   стили (компилируются в style.css на лету)
@@ -334,13 +337,43 @@ ETH_BTC  _  1793491200 _  50000  _  C
 - При старте API из этого файла разворачивается полный список активов
   (для каждого страйка — Call и Put) через `inc/mc.py:loadCatalog()`.
 
-### 4.3 Единицы измерения
+### 4.3 Числовая модель и единицы измерения (задача #31)
 
-- Базовая валюта (base) — **ETH**, единица — **Wei**; котируемая (unit) — **BTC**, единица — **Satoshi**.
-- Цена опциона — в **Satoshi** (целое).
-- Количество — целое (количество контрактов).
-- Кэш цены базового актива хранит `price * 1_000_000`.
-- `getTime()` возвращает целое — микросекунды (`int(time.time() * 10_000_000 / 10)`).
+Денежные величины в системе — **целые числа**, дробных значений нет. Это важное
+соглашение: `quant`/`price`/`amount`/балансы — целые; любое деление округляется
+(`int(round(...))`), а не хранится как float.
+
+| Величина | Единица | Тип | Примечание |
+|---|---|---|---|
+| `quant` (объём) | контракты | int (целое) | > 0; объём позиции может быть отрицательным (short) |
+| `price` (цена опциона) | **Satoshi** | int | за 1 контракт; > 0 |
+| `amount` (`price × quant`) | **Satoshi** | int | знак повторяет знак `quant` (см. `makeDeal`) |
+| баланс `ETH` | **Wei** | int | при регистрации 1000 |
+| баланс `BTC` | **Satoshi** | int | при регистрации 100 000 000 |
+| `PRICE_<TICKER>` | Satoshi | int | сырая цена базового актива **× 1 000 000** |
+| `strike` | Satoshi | int | из каталога, строка → `int()` |
+| `time` (заявки/сделки) | **микросекунды** | int | `getTime()`; см. ниже |
+
+- **`price × 1_000_000`.** Кэш `PRICE_<TICKER>` (`inc/mc.py:setPrice/setCurrent`)
+  умножает цену ETH/BTC на `1e6`, чтобы хранить её целым числом без потери
+  точности. Все потребители (`theo`, фронт `getCounters`) трактуют это значение
+  как Satoshi×1e6; при показе цена не делится (историческое поведение стола).
+- **`getTime()` = микросекунды.** `inc/utils.py:getTime()` возвращает
+  `int(time.time() * 10_000_000 / 10)`, т.е. `time.time() * 1e6`. Это целое
+  (unix-микросекунды). Хранится в `orders.time`, `contracts.time` и в
+  STATE-метках. Фронт делит на `1000` в `convertDate` (историческая схема:
+  значение трактуется как миллисекунды) — деталь отображения, на сортировку в
+  Mongo (`$sort: {time: 1}`) не влияет, т.к. монотонность сохраняется.
+- **Проверки диапазонов на входе** (`api/app.py` `/order`): `quant > 0` и
+  `price > 0` — иначе `400`; `quant`/`price` приводятся к `int`
+  (`int()` → при мусоре `400 Bad Quantity or Price`). Те же проверки —
+  в ветке `edit`. `theo()` (`inc/calculation.py`) сам гарантирует
+  `S>0, K>0, V>0, T>0`, иначе возвращает внутреннюю стоимость.
+- **Защита от деления на ноль.** Везде, где считается средняя цена
+  (`amount / quant`): `inc/contracts.py` (`userContracts`, `userTrades` —
+  при `quant == 0` цена `0`, задача #29), `inc/users.py` (`realisedPL`,
+  `clearContracts`) — ветки `quant == 0` обработаны явно. `setLast()`
+  пропускает закрытые позиции (`quant == 0`).
 
 ### 4.4 Модель данных
 
@@ -672,7 +705,24 @@ pkill -f "api/app.py"           # затем запустить снова ко�
 - ✅ ~~После рестарта BEST/THEO/LAST «пропадают»~~ — см. #19 выше.
 - 🟠 **`api/utils/trader.py`** — CLI-нагрузчик, хардкодит прод-URL `yzoz.com:8080` и
   устаревший формат заявок; запускать только осознанно (в рантайм не входит).
-- 🟡 **Битый ресурс** `public/stylesheets/jquery-ui.css` (в `.gitignore`, но подключается).
+- ✅ ~~Битый ресурс `public/stylesheets/jquery-ui.css`~~ — ссылка удалена из
+  `layout.pug` (виджеты не используются), задача #32. Остальные `src`/`href`
+  проверены. `public/img/*.png` на `/info/*` — отсутствующие ДАННЫЕ (графики не
+  генерируются), а не битые ссылки.
+
+### Этап 3 (P2) — качество
+
+- ✅ ~~Липкие глобалы в JS~~ — `'use strict'` + явные `var` (#26).
+- ✅ ~~Нет линтеров~~ — ESLint+Prettier (JS), ruff (Python), `.editorconfig`
+  (#27); цели `make lint`/`format`.
+- ✅ ~~Лицензия GPLv3~~ — MIT (#28).
+- ✅ ~~Деление на ноль~~ — guard в `userTrades` (#29).
+- ✅ ~~THEO пересчитывался целиком каждую минуту~~ — только изменившиеся тикеры
+  (#30).
+- ✅ ~~Числовая модель не документирована~~ — §4.3 (#31).
+- ✅ ~~AJAX-ошибки терялись молча~~ — `.fail`/`error`-колбэки + `showAjaxError` (#33).
+- ✅ ~~Нет клиентской валидации форм~~ — регистрация/ордер/правка (#34).
+- ✅ ~~Устаревшие jQuery/jQuery UI~~ — 3.7.1 / 1.13.3 (#35).
 
 ---
 

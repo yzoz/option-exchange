@@ -1,7 +1,9 @@
-import requests, logging, time
+import requests
+import logging
+import time
 from influxdb import InfluxDBClient
 logging.getLogger("requests").setLevel(logging.WARNING)
-from inc.utils import getLast, indb, toTS, fromTS
+from inc.utils import getLast, indb, fromTS
 db = InfluxDBClient('localhost', 8086, 'root', 'root', 'spot')
 #https://poloniex.com/public?command=returnTradeHistory&currencyPair=BTC_ETH&start=1519939800+&end=1519943400
 #CREATE RETENTION POLICY "monthly" ON "spot" DURATION INF REPLICATION 1 SHARD DURATION 4w DEFAULT
@@ -14,10 +16,10 @@ stop = time.time()
 
 while end <= stop:
     url = 'https://poloniex.com/public?command=returnTradeHistory&currencyPair=BTC_ETH&start='+str(start)+'&end='+str(end)
-    
+
     #print(fromTS(start), ' | ', fromTS(end))
     #print(url)
-    
+
     res = requests.get(url).json()
     #res = sorted(res, key=lambda k: k['tradeID'])
     q = len(res)

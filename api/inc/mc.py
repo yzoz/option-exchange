@@ -1,4 +1,8 @@
-import requests, time, os, math, json
+import requests
+import time
+import os
+import math
+import json
 from .settings import memdb, modb, CACHE_DIR, INSTRUMENTS
 from .calculation import Calculation
 
@@ -207,13 +211,19 @@ def bybitGet(path, params):
 
 def setCurrent():
     # Живой источник цены (Bybit spot) вместо мёртвого Poloniex.
+    # Возвращает {ticker: price} — планировщик по нему решает, что пересчитывать
+    # (задача ТЗ #30: THEO считаем только для изменившихся цен).
+    prices = {}
     tickers = getTickers() or []
     for ticker in tickers:
         result = bybitGet('/tickers', {'category': 'spot', 'symbol': bybitSymbol(ticker)})
         if not result or not result.get('list'):
             continue
         last = float(result['list'][0]['lastPrice'])
-        _mcSet('PRICE_' + ticker, round(last * 1000000))
+        price = round(last * 1000000)
+        _mcSet('PRICE_' + ticker, price)
+        prices[ticker] = price
+    return prices
 
 def setLast():
     # LAST — цена последней сделки по активу. Memcached не переживает рестарт,
@@ -278,27 +288,35 @@ def upBest(asset, type, price):
     else:
         _mcDelete(key)
 
-def setTheo():
-    tickers = getTickers() or []
-    for ticker in tickers:
-        V = _mcGet('HV_' + ticker)
-        S = _mcGet('PRICE_' + ticker)
+def setTheo(ticker=None):
+    """Пересчитать THEO по сериям тикера (или всем тикерам).
+
+    Задача ТЗ #30: прежняя версия каждую минуту считала THEO по ВСЕМ тикерам,
+    сериям и страйкам — полный перебор каталога. Теперь тикер можно передать
+    явно (`setTheo('ETH_BTC')`), чтобы планировщик не трогал те инструменты,
+    которые не менялись. Аргумент по умолчанию сохраняет прежнее поведение
+    (полный пересчёт) для bootstrap `rebuildCache()`.
+    """
+    tickers = [ticker] if ticker else (getTickers() or [])
+    for tick in tickers:
+        V = _mcGet('HV_' + tick)
+        S = _mcGet('PRICE_' + tick)
         # Без цены или волатильности (нет _cache) theo не считаем: модель
         # вернула бы intrinsic-стоимость с нулевыми входами, что бессмысленно.
         if V is None or S is None:
             continue
-        series = getSeries(ticker) or []
+        series = getSeries(tick) or []
         for serie in series:
             T = getExp(serie)
-            strikes = getStrikes(ticker + '_' + serie) or []
+            strikes = getStrikes(tick + '_' + serie) or []
             for strike in strikes:
                 K = strike
                 j = 1
                 dt = 'C'
                 while j <= 2:
-                    _mcSet('THEO_' + ticker + '_' + serie + '_' + str(strike) + '_' + dt, calc.theo(S, K, V, T, dt))
+                    _mcSet('THEO_' + tick + '_' + serie + '_' + str(strike) + '_' + dt, calc.theo(S, K, V, T, dt))
                     dt = 'P'
-                    j+=1
+                    j += 1
 
 def rebuildCache():
     """Пересобрать рыночный кэш из внешних источников и из Mongo.

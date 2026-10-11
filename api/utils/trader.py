@@ -1,4 +1,6 @@
-﻿import time, random, requests
+﻿import time
+import random
+import requests
 from inc.utils import pyMode
 from inc.settings import memdb
 import hashlib

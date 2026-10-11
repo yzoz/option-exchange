@@ -3,7 +3,9 @@ html
 	head
 		title= 'YZoZ :~: ' + title
 		link(rel='stylesheet', href='/stylesheets/style.css')
-		link(rel='stylesheet', href='/stylesheets/jquery-ui.css')
+		// jquery-ui.js подключён, но ни один виджет jQuery UI на сайте не
+		// используется, поэтому тему-стили библиотеки не грузим: файла в
+		// репозитории нет, прежняя ссылка давала 404 (задача ТЗ #32).
 		script.
 			window.API_SERVER = '!{apiUrl}';
 		script(src='/javascripts/sha3.js')

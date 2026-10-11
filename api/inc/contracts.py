@@ -93,7 +93,9 @@ def userTrades(user):
     for doc in cursor:
         amount = doc['amount']
         quant = doc['quant']
-        price = int(round(doc['amount'] / quant))
+        # quant == 0 (позиция полностью закрыта, сделка-«хвост») — делить нельзя:
+        # цена не определена, показываем 0 (задача ТЗ #29).
+        price = int(round(doc['amount'] / quant)) if quant else 0
         res.append({'asset': doc['asset'], 'quant': quant, 'amount': amount, 'price': price, 'time': doc['time']})
     return res
 

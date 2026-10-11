@@ -1,0 +1,35 @@
+{
+  "root": true,
+  "env": {
+    "browser": true,
+    "node": true,
+    "jquery": true,
+    "es2022": true
+  },
+  "parserOptions": {
+    "ecmaVersion": 2022,
+    "sourceType": "script"
+  },
+  "extends": ["eslint:recommended"],
+  "globals": {
+    "jsSHA": "readonly"
+  },
+  "rules": {
+    "no-unused-vars": ["warn", { "args": "none" }],
+    "no-undef": "error"
+  },
+  "overrides": [
+    {
+      "files": ["public/javascripts/exchange.js"],
+      "rules": {
+        "no-unused-vars": "off"
+      }
+    }
+  ],
+  "ignorePatterns": [
+    "node_modules/",
+    "public/javascripts/jquery.js",
+    "public/javascripts/jquery-ui.js",
+    "public/javascripts/sha3.js"
+  ]
+}

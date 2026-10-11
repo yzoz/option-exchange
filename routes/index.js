@@ -1,9 +1,9 @@
 var express = require('express'),
-	router = express.Router()
+  router = express.Router()
 
 router.get('/', (req, res) => {
-	res.render('index', { 
-	title: 'Crypto Financial'
+  res.render('index', {
+    title: 'Crypto Financial'
   })
 })
 

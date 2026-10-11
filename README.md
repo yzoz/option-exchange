@@ -39,7 +39,8 @@
 
 | Слой | Технологии |
 |---|---|
-| Веб-фронтенд | Node.js, Express 4, Pug, jQuery / jQuery UI, LESS |
+| Веб-фронтенд | Node.js, Express 4, Pug, jQuery 3.7 / jQuery UI 1.13, LESS |
+| Качество кода | ESLint + Prettier (JS), ruff (Python), `.editorconfig` |
 | API | Python 3, Bottle (dev-сервер или WSGI/Gunicorn) |
 | Состояние | MongoDB — `users`, `orders`, `contracts` |
 | История | InfluxDB 1.8 — «river» заявок/сделок (БД `orders`, `trades`, `spot`) |
@@ -69,6 +70,7 @@ ETH_BTC  _  1793491200   _  50000   _  C
 cp .env.example .env          # конфиг: порты, креды, API_URL (см. ниже)
 make up                       # хранилища (docker compose) + API + theo + веб
 make e2e                      # сквозной сценарий (регистрация → ордер → сделка)
+make lint                     # линтеры: ruff (Python) + ESLint (JS)
 ```
 
 После старта:
@@ -98,6 +100,18 @@ make e2e                      # сквозной сценарий (регист�
 > Главный подводный камень: `API_URL` и `API_PORT` должны совпадать, иначе сайт
 > откроется, но данные будут пустыми. При недоступном хранилище API поднимается в
 > **degraded**-режиме, а запросы к нему отвечают понятным `503` — см. `GET /health`.
+
+## Разработка
+
+```bash
+make check      # синтаксис: py_compile + node --check + compose config
+make lint       # ruff (Python) + ESLint (JS)
+make format     # prettier --write + ruff --fix
+```
+
+Линтеры настроены в `ruff.toml`, `.eslintrc.json`, `.prettierrc.json`,
+`.editorconfig`. Python-линтер `ruff` ставится отдельно (`pip install ruff`);
+ESLint/Prettier — в `devDependencies` (ставятся `npm install`).
 
 ## Документация
 

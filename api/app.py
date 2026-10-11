@@ -1,7 +1,7 @@
 import json
 import os
 import bottle
-from bottle import hook, route, run, template, debug, post, request, response, HTTPError, abort
+from bottle import hook, route, run, template, debug, post, request, response, abort
 from bson.objectid import ObjectId
 from pymongo.errors import PyMongoError
 from influxdb.exceptions import InfluxDBClientError as InfluxDBError
