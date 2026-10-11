@@ -1,59 +1,41 @@
 # RUNBOOK — как поднять YZoZ Option Exchange с нуля
 
-> ⚠️ **Актуальность.** Часть инструкций ниже описывает состояние ДО задач №1–5 ТЗ
-> (`docs/SPEC.md`): пароль как seed, порт API 69, ручной `docker run`. Эти места уже
-> устарели — см. `docs/DONE.md` и `docs/DEVELOPER_GUIDE.md` §7. Кратко, как сейчас:
-> хранилища — `docker compose up -d`; конфиг — `.env` (из `.env.example`); секрет —
-> **пароль** (PBKDF2), а не seed; API слушает `API_PORT` (по умолчанию 6969) и
-> стартует `PY_MODE=dev python api/app.py` без root; фронт берёт адрес API из
-> `API_URL` (`window.API_SERVER`). Ниже оставлено как исторический контекст и
-> диагностика проблем.
+> **Статус документа.** Обновлён после Этапа 1 ТЗ (задачи 1–8): конфиг в `.env`,
+> хранилища через `docker compose`, пароль (PBKDF2) вместо seed, API на
+> `API_PORT`, фронт берёт адрес API из `API_URL`, Bybit вместо Poloniex,
+> `_cache` необязателен. Исторические детали прежнего запуска (ручной
+> `docker run`, патч `theo()`, раннер `/tmp`, правка JS на порт 69) больше не
+> нужны — они остались в git-истории. См. также `docs/DONE.md` (что сделано) и
+> `docs/DEVELOPER_GUIDE.md` §7 (архитектура и карта портов).
 >
-> Пошаговая инструкция «чтобы получилось с первого раза». Всё ниже **проверено**
-> на чистой машине: Node 24, Python 3.10, Docker. Где есть подводные камни — они
-> отмечены 🪨, а рядом — как я их обошёл.
->
-> Дополнительно см. `docs/DEVELOPER_GUIDE.md` (описание архитектуры и карта проекта).
+> Пошаговая инструкция «чтобы получилось с первого раза». Проверено на Node 24,
+> Python 3.10, Docker. Подводные камни отмечены 🪨.
 
 ---
 
 ## TL;DR (быстрый путь)
 
-Если план `_cache`, `docker-compose` не пугает и вы готовы на один патч — вот весь путь:
-
 ```bash
-# 0. Один раз: патч №1 (см. §5) в api/inc/calculation.py  ← ОБЯЗАТЕЛЬНО, иначе API не стартует
+cd option-exchange
+cp .env.example .env
 
-# 1. Хранилища
-docker run -d --name eq-mongo    -p 27017:27017 \
-  -e MONGO_INITDB_ROOT_USERNAME=ad -e MONGO_INITDB_ROOT_PASSWORD=pass mongo:latest
-docker run -d --name eq-memcached -p 11211:11211 memcached:latest -m 64
-docker run -d --name eq-influx   -p 8086:8086 \
-  -e INFLUXDB_HTTP_AUTH_ENABLED=false influxdb:1.8
+# 1. Хранилища (Mongo + Memcached + InfluxDB 1.8), базы Influx создаются сами
+docker compose up -d
 
-# 2. Базы InfluxDB (иначе первый ордер = 500)
-for db in orders trades spot; do
-  curl -s -XPOST localhost:8086/query --data-urlencode "q=CREATE DATABASE \"$db\""
-done
-
-# 3. Рыночный кэш
-mkdir -p _cache && echo 50000 > _cache/ETH_BTC_PRICE && echo 0.8 > _cache/ETH_BTC_HV_7
-
-# 4. Python
+# 2. Python-окружение и API (порт 6969 — не привилегированный, root не нужен)
 python3 -m venv .venv && source .venv/bin/activate
-pip install "pymongo<4" influxdb python-memcached scipy pandas six requests schedule bottle
+pip install -r requirements.txt
+PY_MODE=dev python api/app.py &          # API  → http://localhost:6969
 
-# 5. Node
+# 3. Веб-слой Node/Express
 npm install
-PORT=3000 node ./bin/www &                     # веб → http://localhost:3000
+node ./bin/www &                          # веб  → http://localhost:3000
 
-# 6. API (без root): запускаем на 6969 через раннер из §7
-python /tmp/oe-dev/run_api.py &                # API → http://localhost:6969
-
-# 7. Проверка
-open http://localhost:3000/exchange/           # в JS поменяйте порт API на 6969 (см. §8)
+# 4. Проверка
+open http://localhost:3000/exchange/      # HV/Price должны заполниться (Bybit)
 ```
 
+Ни `_cache`, ни ручной `CREATE DATABASE`, ни патч `calculation.py` больше не нужны.
 Дальше — те же шаги подробно, с объяснением «почему» и таблицей типовых ошибок.
 
 ---
@@ -73,44 +55,46 @@ open http://localhost:3000/exchange/           # в JS поменяйте пор
 node -v && npm -v && python3 --version && docker ps >/dev/null && echo "OK"
 ```
 
-🪨 **Python 3.12+ — риск.** Код 2018 года; зависимость `pymongo<4` и `influxdb` могут
-собираться/работать капризно на 3.12. Проверено на **3.10** — берите её, если есть выбор.
+🪨 **Python 3.12+ — риск.** Код 2018 года; зависимости `pymongo<4` и `influxdb`
+могут собираться/работать капризно на 3.12. Проверено на **3.10** — берите её,
+если есть выбор.
 
 ---
 
 ## 1. Порты и адреса (выучить сразу)
 
-| Сервис | Порт | Комментарий |
-|---|---|---|
-| Express (веб) | **80 / 443** в проде, иначе `PORT` | По умолчанию `bin/www` берёт 80 → нужен root. Мы зададим `PORT=3000`. |
-| Python API | **69** в dev, **8080** в проде | Оба привилегированных/неудобных. Запускаем на **6969** через раннер. |
-| MongoDB | 27017 | |
-| InfluxDB | 8086 | Нужна ветка **1.x** (клиент в коде — `influxdb` python, старый API). |
-| Memcached | 11211 | |
+| Сервис | Порт (dev) | Порт (prod) | Где задаётся |
+|---|---|---|---|
+| Express (веб) | **3000** (`WEB_PORT`) | 80 / 443 | `.env` → `bin/www` |
+| Python API | **6969** (`API_PORT`) | 6969 | `.env` → `api/app.py` |
+| MongoDB | 27017 | 27017 | `.env` → `api/inc/settings.py` |
+| InfluxDB | 8086 | 8086 | `.env` → `api/inc/settings.py` |
+| Memcached | 11211 | 11211 | `.env` → `api/inc/settings.py` |
 
-🪨 **Главный подводный камень:** `public/javascripts/exchange.js` **хардкодит** адрес API:
+В dev-режиме оба сервера слушают **непривилегированные** порты — `sudo` не нужен.
 
-```js
-if (host == 'localhost') {
-    var apiServer = 'http://localhost:69';   // ← фронт будет стучаться сюда
-```
-
-Поэтому либо API обязан жить на `localhost:69`, либо придётся поправить эту строку
-(см. §8). Это причина №1, почему «сайт открылся, а данные не грузятся».
+🪨 **Главный подводный камень:** браузер должен знать адрес API. Он НЕ берётся из
+`hostname` — Express инжектит `window.API_SERVER` из `API_URL` (`.env`) в страницу
+(`views/layout.pug`), а `public/javascripts/exchange.js` читает
+`window.API_SERVER`. Если `API_URL` не совпадает с реальным портом API — сайт
+откроется, но данные будут пустыми. При смене `API_PORT` правьте и `API_URL`
+(и, если меняете порт веба, — `CORS_ORIGIN`).
 
 ---
 
-## 2. Хранилища (Docker)
+## 2. Хранилища (Docker Compose)
 
 ```bash
-docker run -d --name eq-mongo -p 27017:27017 \
-  -e MONGO_INITDB_ROOT_USERNAME=ad -e MONGO_INITDB_ROOT_PASSWORD=pass mongo:latest
-
-docker run -d --name eq-memcached -p 11211:11211 memcached:latest -m 64
-
-docker run -d --name eq-influx -p 8086:8086 \
-  -e INFLUXDB_HTTP_AUTH_ENABLED=false influxdb:1.8
+cp .env.example .env
+docker compose up -d
 ```
+
+Поднимаются три сервиса (`docker-compose.yml`):
+
+- `mongo:6.0` — контейнер `eq-mongo`, креды из `MONGO_USER`/`MONGO_PASSWORD`;
+- `memcached:1.6` (`-m 64`) — `eq-memcached`;
+- `influxdb:1.8` — `eq-influx`, базы `orders`/`trades`/`spot` создаются
+  автоматически (`INFLUXDB_DATABASES`).
 
 Проверка, что всё живо:
 
@@ -121,72 +105,62 @@ curl -s -o /dev/null -w 'influx:%{http_code}\n' localhost:8086/ping          # �
 printf 'version\r\n' | timeout 3 nc localhost 11211 | head -1                # → VERSION ...
 ```
 
-🪨 **Не берите `influxdb:2`** — это другой продукт (Flux, токены, нет базы `db` в старом
-смысле). Python-клиент `influxdb` 5.x из кода с ним не работает.
-🪨 Креды Mongo (`ad` / `pass`) **зашиты в код** — `api/inc/settings.py`. Поэтому
-обязательно задаём `MONGO_INITDB_ROOT_USERNAME`/`PASSWORD` именно такими.
+🪨 **InfluxDB только 1.8.** Python-клиент `influxdb` 5.x из кода несовместим с
+InfluxDB 2.x (Flux/токены).
+🪨 Креды Mongo должны совпадать с `.env` (`MONGO_USER`/`MONGO_PASSWORD`) — БД
+инициализируется ими при первом старте.
+🪨 Если порты 27017/8086/11211 заняты старыми `docker run`-контейнерами, сначала
+`docker rm -f eq-mongo eq-memcached eq-influx`.
 
 ---
 
 ## 3. Базы InfluxDB
 
-Код пишет историю в БД `orders` и `trades` (плюс `spot` для графиков). По умолчанию их нет:
+С `docker compose` их создавать **не нужно** — `INFLUXDB_DATABASES` в compose уже
+включает `orders,trades,spot`. Проверить:
+
+```bash
+curl -s "localhost:8086/query?q=SHOW+DATABASES" | head -c 400
+```
+
+🪨 **Если поднимали Influx вручную (без compose)** и забыли создать базы, симптом
+такой: регистрация и балансы работают, а **любой ордер падает HTTP 500** с
+`InfluxDBClientError: 404 database not found: "orders"`. Создайте вручную:
 
 ```bash
 for db in orders trades spot; do
   curl -s -XPOST localhost:8086/query --data-urlencode "q=CREATE DATABASE \"$db\""
 done
-curl -s "localhost:8086/query?q=SHOW+DATABASES" | head -c 400
 ```
-
-🪨 **Симптом, если забыть:** регистрация и балансы работают, а **любой ордер падает
-HTTP 500** с `InfluxDBClientError: 404 database not found: "orders"`. Именно так и было у меня.
 
 ---
 
-## 4. Рыночный кэш (`_cache/`)
+## 4. Рыночный кэш (`_cache/`) — необязателен
 
-При старте API вызывает `setPrice()` и `setHV()`, которые читают файлы
-`_cache/<TICKER>_PRICE` и `_cache/<TICKER>_HV_7`. В репозитории их нет (`.gitignore`),
-а штатный генератор `api/utils/robo.py` тянет данные с **Poloniex — API мертвяк**
-(проверено: пустой ответ). Поэтому создаём вручную:
+При старте API вызывает `setPrice()`/`setHV()`/`setTheo()`. Источника два:
 
-```bash
-cd option-exchange
-mkdir -p _cache
-echo 50000 > _cache/ETH_BTC_PRICE     # цена ETH/BTC ×1e6 (произвольное ненулевое)
-echo 0.8   > _cache/ETH_BTC_HV_7      # волатильность 80%
-```
+1. файлы `_cache/<TICKER>_PRICE` и `_cache/<TICKER>_HV_7` (если есть — приоритет);
+2. **Bybit public API** — если файлов нет (это и есть штатный режим после
+   задачи #7).
 
-🪨 **Симптом, если забыть:** API падает на старте с
-`FileNotFoundError: '../_cache/ETH_BTC_PRICE'`.
+`_cache` теперь **не требуется**: без него API поднимается и берёт цену/HV с Bybit.
+Создавать файлы вручную (как раньше в этом разделе) больше не нужно.
+
+🪨 **Проверка «рынок жив»:** `curl -s localhost:6969/counters/ETH_BTC` при
+работающем интернете вернёт `[{"price": <с Bybit>,"vola": <HV>}]`. Если ответ
+`null` — нет ни файлов, ни доступа к Bybit (проверьте сеть/файрвол).
 
 ---
 
-## 5. Патч №1 (обязателен до фикса по ТЗ #8) — `api/inc/calculation.py`
+## 5. `theo()` — править больше не нужно
 
-В `exchange/instruments.json` единственная серия экспирации — **`1519862400` = март 2018**,
-то есть в прошлом. `setTheo()` считает Блэк–Шоулз с отрицательным временем до
-экспирации → `math.log`/`sqrt` дают `ValueError: math domain error`, и **API не поднимается**.
+Ранее требовался обязательный патч `api/inc/calculation.py` (guard на `T <= 0`),
+иначе API не стартовал на истёкшей серии `1519862400`. Задача #8 закрыта: `theo()`
+сама проверяет `S/K/V/T > 0` и возвращает внутреннюю стоимость для истёкших серий.
+Никаких ручных правок перед запуском не требуется.
 
-Минимальная правка (guard на `T <= 0 || V <= 0`):
-
-```python
-def theo(self, S, K, V, T, dT):
-    # Guard: Black-Scholes undefined for non-positive time to expiry
-    # (e.g. expired/hardcoded series). Fall back to intrinsic value.
-    if T <= 0 or V <= 0:
-        if dT == 'C':
-            theo = int(round(max(S - K, 0)))
-        else:
-            theo = int(round(max(K - S, 0)))
-        return theo if theo > 0 else 1
-    if dT == 'C':
-        ...
-```
-
-🪨 Это временная заглушка. По ТЗ задача **#8** заменяет её на нормальную обработку
-истёкших серий; по задаче **#17** серии регенерируются в актуальные.
+> Серии в `exchange/instruments.json` по-прежнему истекшие — актуализация
+> запланирована задачей ТЗ **#17** (тогда `theo()` вернётся к модели Блэка–Шоулза).
 
 ---
 
@@ -196,94 +170,87 @@ def theo(self, S, K, V, T, dT):
 cd option-exchange
 python3 -m venv .venv
 source .venv/bin/activate
-pip install "pymongo<4" influxdb python-memcached scipy pandas six requests schedule bottle
-```
-
-🪨 **Почему `"pymongo<4"`:** код вызывает `client.admin.authenticate('','')`
-(`api/inc/settings.py`). В pymongo 4 метод удалён. В 3.13 он есть (проверено) — берём 3.x.
-🪨 `python-memcached` даёт модуль `memcache` (именно его импортирует код), НЕ `pymemcache`.
-🪨 В репо лежит `api/utils/memcache.py` — это вендорная копия библиотеки, **не используйте её**.
-
----
-
-## 7. Запуск API на невысоком порту (без root)
-
-`api/app.py` при `PY_MODE=dev` сам вызывает `run(host='0.0.0.0', port=69)`. Порт 69
-привилегированный → `PermissionError: [Errno 13]`. Обошёл так: запускаю модуль
-**в prod-ветке** (она не вызывает `run`, а отдаёт WSGI-приложение) под своим портом.
-
-Создайте файл **вне репозитория**:
-
-```bash
-mkdir -p /tmp/oe-dev
-cat > /tmp/oe-dev/run_api.py <<'PY'
-import os, sys, importlib
-os.environ.pop('PY_MODE', None)          # не даём app.py уйти в ветку run(port=69)
-sys.path.insert(0, 'REPO/api')           # ← замените REPO на путь к проекту (или запустите из api/)
-import bottle
-application = importlib.import_module('app').application
-bottle.run(app=application, host='0.0.0.0', port=6969, debug=False)
-PY
-
-cd option-exchange/api
-python /tmp/oe-dev/run_api.py &
+pip install -r requirements.txt
+PY_MODE=dev python api/app.py     # слушает API_HOST:API_PORT (0.0.0.0:6969)
 ```
 
 Проверка:
 
 ```bash
-curl -s localhost:6969/counters/ETH_BTC      # → [{"price": 50000,"vola": 0.8}]
+curl -s localhost:6969/counters/ETH_BTC      # → [{"price": ..., "vola": ...}]
 ```
 
-Альтернативы, если хочется канонический порт 69:
-- `sudo` (тогда просто `PY_MODE=dev python api/app.py`);
-- либо правка `api/app.py`/конфига на невысокий порт — но это уже задача ТЗ **#10**.
+🪨 **Зависимости зафиксированы** в `requirements.txt` (в т.ч. `python-dotenv`).
+Отдельно ставить `"pymongo<4"`/`python-memcached` вручную больше не нужно — они
+там есть.
+🪨 `python-memcached` даёт модуль `memcache` (не `pymemcache`).
+🪨 `api/utils/memcache.py` — вендорная копия библиотеки, **не используйте её**.
+🪨 Запускайте из **корня репозитория** (как выше), чтобы `.env`, `exchange/` и
+`_cache/` находились по абсолютным путям из `settings.py`.
 
 ---
 
-## 8. Node/Express (веб)
+## 7. Запуск API и веб-слоя
+
+**API (Bottle).** Dev-режим поднимает встроенный сервер на `API_HOST:API_PORT`
+(по умолчанию `0.0.0.0:6969`) — привилегированных портов нет:
 
 ```bash
-cd option-exchange
+PY_MODE=dev python api/app.py
+```
+
+Любое другое значение `PY_MODE` отдаёт WSGI-приложение (прод/Gunicorn).
+
+**Веб (Node/Express).** Порт берётся из `WEB_PORT` (dev-дефолт 3000):
+
+```bash
 npm install
-PORT=3000 node ./bin/www &          # веб на http://localhost:3000
+node ./bin/www
 ```
 
-🪨 **Почему `PORT=3000`:** `bin/www` в dev-ветке берёт порт **80** → снова `PermissionError`.
-🪨 **Про `npm install`:** в `package.json` все версии — `"latest"`, поэтому сейчас
-ставится **Express 5.3** и `body-parser 2.x` под код, писавшийся под Express 4.
-У меня **завелось как есть** (Express 5 сохраняет совместимость для `app.use(router)`,
-`res.render`, `res.redirect`). Это хрупко и будет зафиксировано в ТЗ **#9**.
+🪨 **Про `npm install`.** `package-lock.json` закоммичен, но в `package.json`
+часть версий всё ещё `"latest"`, из-за чего lock фиксирует **Express 5.3** под код,
+писавшийся под Express 4. На практике заводится (совместимость `app.use(router)`,
+`res.render`, `res.redirect`), но хрупко — фиксация версий это задача ТЗ **#9**.
 
-**Связать фронт с API.** По умолчанию фронт ждёт API на `localhost:69` (§1). Если
-вы, как я, подняли API на 6969 — откройте `public/javascripts/exchange.js` и на время
-разработки поменяйте:
-
-```js
-var apiServer = 'http://localhost:69';   // → 'http://localhost:6969'
-```
-
-(В постоянном решении это выносится в конфиг — ТЗ **#10** / аудит п.4.)
+**Связь фронта с API** задаётся в `.env` (`API_URL`) — правка JS, как раньше, не
+нужна.
 
 ---
 
-## 9. Проверка, что всё действительно работает
+## 8. Проверка, что всё действительно работает
+
+### Автоматический e2e-тест (рекомендуется)
+
+```bash
+# при поднятом API
+.venv/bin/python tests/e2e.py            # адрес API из API_URL
+```
+
+Проверяет регистрацию, балансы, частичный/полный матчинг, атомарность при
+параллельных ордерах и негативные ответы (401/400). Завершается кодом `1` при
+провале. См. `docs/DEVELOPER_GUIDE.md` §0.3.1 — тест нужно дополнять при правках.
 
 ### В браузере
-1. Откройте `http://localhost:3000/` — лендинг.
-2. `http://localhost:3000/exchange/` — торговый стол со страйками 200000…10000.
-   В правом верхнем углу должны появиться **HV** и **Price** (значит фронт достучался до API).
-3. `http://localhost:3000/info/eth/btc/` — страница аналитики (картинки графиков пока
-   отсутствуют — это нормально, см. ТЗ #32).
+
+1. `http://localhost:3000/` — лендинг.
+2. `http://localhost:3000/exchange/` — торговый стол. В правом верхнем углу
+   должны появиться **HV** и **Price** (значит фронт достучался до API).
+3. `http://localhost:3000/info/eth/btc/` — аналитика (картинки графиков могут
+   отсутствовать — задача ТЗ #32).
 
 ### Сквозной сценарий через API (без браузера)
 
 ```bash
-python3 - <<'PY'
+python3 tests/e2e.py
+```
+
+Ручной вариант (если нужно точечно):
+
+```python
 import json, hmac, hashlib, urllib.request
-API  = 'http://localhost:6969'
-KEY  = 'TESTY-AAAAA-BBBBB-CCCCC-1'
-SEED = 'test seed phrase one'
+API, PW = 'http://localhost:6969', 'secret-pass'
+KEY, SEED = 'TESTY-AAAAA-BBBBB-CCCCC-1', 'test seed phrase one'
 
 def post(path, payload):
     req = urllib.request.Request(API+path, data=json.dumps(payload).encode(),
@@ -291,77 +258,61 @@ def post(path, payload):
     return urllib.request.urlopen(req).read().decode()
 
 def mac(msg):
-    return hmac.new(SEED.encode(), msg.encode(), hashlib.sha3_512).hexdigest()
+    return hmac.new(PW.encode(), msg.encode(), hashlib.sha3_512).hexdigest()
 
-print(post('/signup', {'key': KEY, 'seed': SEED, 'email': 'a@b.c'})[:80])
-print(post('/user', {'user': KEY, 'hmac': mac('balances'), 'question': 'balances'})[:60], '...')
-
-asset, typ, q, price = 'ETH_BTC_1519862400_100000_C', 'buy', 5, 30000
-q_msg = 'send' + typ + str(q) + asset + str(price)
-print(post('/order', {'user': KEY, 'hmac': mac(q_msg),
-                      'question': {'action':'send','type':typ,'quant':q,'asset':asset,'price':price}}))
-PY
+print(post('/signup', {'key': KEY, 'seed': SEED, 'password': PW})[:80])
+print(post('/user', {'user': KEY, 'password': PW, 'hmac': mac('balances'),
+                     'question': 'balances'})[:60], '...')
 ```
 
-Ожидаемо: `User ... created!`, затем дерево баланса, затем `SendLimit: ...`.
+> ⚠ HMAC считается по **паролю**, а не по seed (схема после задачи #5).
 
 ---
 
-## 10. Таблица типовых ошибок
+## 9. Проверка, что всё действительно работает (диагностика)
 
 | Симптом | Причина | Что делать |
 |---|---|---|
-| `EACCES` / порт 80 занят/запрещён | `bin/www` по умолчанию на 80 | `PORT=3000 node ./bin/www` |
-| `PermissionError: [Errno 13]` на API | порт 69 < 1024 | раннер из §7 на 6969 или `sudo` |
-| API: `FileNotFoundError .../_cache/...` | нет рыночного кэша | §4 |
-| API: `ValueError: math domain error` | серия истекла (2018) | патч §5 |
-| Ордер → **HTTP 500**, `database not found: "orders"` | не созданы БД Influx | §3 |
-| Сайт открылся, но данные пустые | фронт стучится на `localhost:69`, а API на 6969 | §1/§8 |
-| `pymongo` `authenticate` отсутствует | поставился pymongo 4 | `pip install "pymongo<4"` |
-| `ModuleNotFoundError: memcache` | поставили не ту библиотеку | `pip install python-memcached` |
-| `mongo` не подключается | контейнер не готов / не те креды | `docker ps`, ждать ~5 c, креды `ad/pass` |
+| API не стартует, `Address already in use` | порт 6969 занят | сменить `API_PORT` (и `API_URL`) |
+| Сайт открылся, но данные пустые | `API_URL` не совпадает с портом API | синхронизировать `API_URL`/`API_PORT` |
+| `/counters/...` → `null` | нет `_cache` и нет доступа к Bybit | проверить сеть; при желании создать `_cache` (см. §4) |
+| Ордер → **HTTP 500**, `database not found: "orders"` | не созданы БД Influx (ручной запуск) | §3 |
+| `pymongo` `authenticate` отсутствует | поставлен pymongo 4 | `pip install "pymongo<4"` (или `pip install -r requirements.txt`) |
+| `ModuleNotFoundError: memcache` | не та библиотека | `pip install python-memcached` |
+| `mongo` не подключается | контейнер не готов / не те креды | `docker ps`, ждать ~5 c, сверить `.env` |
 | `docker: permission denied` | нет прав на docker | добавить пользователя в группу `docker` |
 | Графики 404 на `/info/*` | `public/img/*` не сгенерированы | нормально (ТЗ #32) |
 | `jquery-ui.css` 404 | файл в `.gitignore` | нормально (ТЗ #33) |
 
 ---
 
-## 11. Сценарий «одной командой» (для копипаста)
+## 10. Сценарий «одной командой» (для копипаста)
 
 ```bash
 set -e
 REPO="$HOME/dev/option-exchange"; cd "$REPO"
 
-docker start eq-mongo eq-memcached eq-influx 2>/dev/null || {
-  docker run -d --name eq-mongo -p 27017:27017 -e MONGO_INITDB_ROOT_USERNAME=ad \
-    -e MONGO_INITDB_ROOT_PASSWORD=pass mongo:latest
-  docker run -d --name eq-memcached -p 11211:11211 memcached:latest -m 64
-  docker run -d --name eq-influx -p 8086:8086 -e INFLUXDB_HTTP_AUTH_ENABLED=false influxdb:1.8
-}
+[ -f .env ] || cp .env.example .env
+docker compose up -d
 sleep 5
-for db in orders trades spot; do
-  curl -s -XPOST localhost:8086/query --data-urlencode "q=CREATE DATABASE \"$db\"" >/dev/null
-done
-mkdir -p _cache
-[ -f _cache/ETH_BTC_PRICE ] || echo 50000 > _cache/ETH_BTC_PRICE
-[ -f _cache/ETH_BTC_HV_7 ]  || echo 0.8   > _cache/ETH_BTC_HV_7
 
 [ -d .venv ] || python3 -m venv .venv
 source .venv/bin/activate
-pip -q install "pymongo<4" influxdb python-memcached scipy pandas six requests schedule bottle
+pip -q install -r requirements.txt
 [ -d node_modules ] || npm install
 
-PORT=3000 node ./bin/www >/tmp/oe-web.log 2>&1 &
-( cd api && python /tmp/oe-dev/run_api.py >/tmp/oe-api.log 2>&1 & )
-sleep 6
+PY_MODE=dev python api/app.py >/tmp/oe-api.log 2>&1 &
+node ./bin/www >/tmp/oe-web.log 2>&1 &
+sleep 8
+
+.venv/bin/python tests/e2e.py
 echo "веб: http://localhost:3000/exchange/   api: http://localhost:6969/"
 ```
 
 Остановка:
 
 ```bash
-pkill -f "bin/www"; pkill -f run_api.py
-docker stop eq-mongo eq-memcached eq-influx
+kill %1 %2 2>/dev/null; docker compose stop
 ```
 
 Сброс данных (если нужно с нуля):
@@ -369,17 +320,42 @@ docker stop eq-mongo eq-memcached eq-influx
 ```bash
 docker exec eq-mongo mongosh exchange --quiet --eval \
   "db.users.drop(); db.orders.drop(); db.contracts.drop()"
-curl -s -XPOST localhost:8086/query --data-urlencode 'q=DROP DATABASE "orders"'
-curl -s -XPOST localhost:8086/query --data-urlencode 'q=DROP DATABASE "trades"'
-curl -s -XPOST localhost:8086/query --data-urlencode 'q=CREATE DATABASE "orders"'
-curl -s -XPOST localhost:8086/query --data-urlencode 'q=CREATE DATABASE "trades"'
+for db in orders trades; do
+  curl -s -XPOST localhost:8086/query --data-urlencode "q=DROP DATABASE \"$db\""
+  curl -s -XPOST localhost:8086/query --data-urlencode "q=CREATE DATABASE \"$db\""
+done
 ```
 
 ---
 
-## 12. Что упростит запуск в будущем (из ТЗ)
+## 11. Генерация графиков (`robo.py`, задача #32)
 
-- **#1–2:** `.env` + `docker-compose.yml` (все хранилища одной командой, креды в конфиг).
-- **#9:** зафиксированные версии (`package-lock.json`, `requirements.txt`) — уходит риск с Express 5.
-- **#10:** API на настраиваемом невысоком порту; фронт берёт адрес API из конфига, а не из `hostname`.
-- **#7, #17:** живой источник данных (Bybit) + актуальные серии → больше не нужны ручные `_cache` и патч `theo()`.
+`api/utils/robo.py` — отдельный скрипт (не входит в рантайм API). Он тянет
+свечи с Bybit, пишет историю в InfluxDB `spot` и строит PNG в `public/img/`.
+Импортирует `inc.*`, поэтому запускать **из каталога `api/`**:
+
+```bash
+cd api && python utils/robo.py
+```
+
+🪨 Требует `matplotlib` (нет в `requirements.txt` — тяжёлая зависимость, нужна
+только для графиков): `pip install matplotlib`. `numpy` придёт с `scipy`/`pandas`.
+Полноценная генерация графиков для `/info/*` — вне текущего блока (ТЗ #32).
+
+---
+
+## 12. Что уже не нужно (историческое)
+
+Эти шаги из ранних версий RUNBOOK больше **не выполняются**:
+
+- ручной `docker run` для Mongo/Memcached/Influx → `docker compose up -d`;
+- ручное создание БД Influx → авто (`INFLUXDB_DATABASES`);
+- создание `_cache/ETH_BTC_PRICE` и `_cache/ETH_BTC_HV_7` вручную → Bybit;
+- патч `api/inc/calculation.py` (guard `theo()`) → задача #8 закрыта;
+- запуск API через раннер `/tmp/oe-dev/run_api.py` на 6969 → `API_PORT`;
+- правка `public/javascripts/exchange.js` (`localhost:69`) → `API_URL`;
+- seed как секрет/HMAC-ключ → пароль (PBKDF2) + HMAC по паролю.
+
+Осталось из ТЗ (кратко): **#9** (фиксация версий Express 4.x), **#12** (чистка
+git-истории), **#17** (актуальные серии), **#32** (графики). Полный список —
+`docs/SPEC.md`.

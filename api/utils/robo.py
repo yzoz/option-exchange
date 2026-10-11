@@ -1,4 +1,4 @@
-﻿import os
+import os
 import time
 from inc.mc import bybitGet, bybitSymbol
 from inc.settings import indb, ROOT, CACHE_DIR
