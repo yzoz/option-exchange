@@ -32,8 +32,16 @@ import random
 import string
 import sys
 import threading
+import time
 import urllib.error
 import urllib.request
+
+# Читаем .env (как API), чтобы взять RATE_WINDOW/RATE_MAX из того же конфига.
+try:
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '.env'))
+except ImportError:
+    pass
 
 API = os.getenv('API_URL', 'http://localhost:6969')
 TICKER = 'ETH_BTC'
@@ -193,8 +201,31 @@ def scenario_matching():
     check('quant<=0 -> 400', '400' in b.order('buy', 0, PRICE))
 
 
+def scenario_rate_limit():
+    """Rate-limit публичных входов: серия запросов с одного IP -> HTTP 429.
+
+    Запускается последней, т.к. расходует бюджет лимитера для этого IP.
+    Отключается E2E_RATE=0 (например, если лимитер выключен через RATE_LIMIT=0).
+    """
+    if os.getenv('E2E_RATE', '1') == '0':
+        print('[6] Rate-limit — пропущен (E2E_RATE=0)')
+        return
+    rate_max = int(os.getenv('RATE_MAX', '120'))
+    print('[6] Rate-limit: до %d запросов с одного IP -> 429' % rate_max)
+    got_429 = False
+    for _ in range(rate_max * 2 + 20):
+        if '429' in _post('/user', {}):
+            got_429 = True
+            break
+    check('серия запросов -> 429', got_429)
+
+
 def main():
     print('E2E против %s' % API)
+    # Дождаться чистой квоты rate-лимитера: сценарий rate-limit в конце
+    # насыщает окно, поэтому повторный запуск сразу после него получил бы 429.
+    if os.getenv('E2E_RATE', '1') != '0':
+        time.sleep(float(os.getenv('RATE_WINDOW', '60')) + 2)
     ping = _post('/user', {})  # ожидаем 400, но главное — API отвечает
     if 'HTTP' not in ping:
         print('API не отвечает по %s' % API)
@@ -202,6 +233,7 @@ def main():
     if reset_exchange_state():
         print('(состояние ордеров/контрактов сброшено)')
     scenario_matching()
+    scenario_rate_limit()
 
     print('\nИтог: %d проверок, %d провалов' % (_checks, len(_failures)))
     if _failures:

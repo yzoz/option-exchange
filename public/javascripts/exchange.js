@@ -1,4 +1,5 @@
-var apiServer = window.API_SERVER || 'http://localhost:69';
+// Адрес API инжектится Express из API_URL (.env). Fallback — локальная разработка.
+var apiServer = window.API_SERVER || 'http://localhost:6969';
 var stateTimer = 5000;
 window.apiServer = apiServer;
 

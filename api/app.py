@@ -5,7 +5,7 @@ from bottle import hook, route, run, template, debug, post, request, response, H
 from bson.objectid import ObjectId
 from inc.settings import modb, memdb, INSTRUMENTS
 from inc.influx import outOrders, outTrades
-from inc.utils import pyMode, getTime, splitAsset, hashUser, hashPassword, verifyPassword, checkHMAC
+from inc.utils import pyMode, getTime, splitAsset, hashUser, hashPassword, verifyPassword, checkHMAC, rateAllow
 from inc.orders import userOrders, removeOrder, getOrder, \
      getAsset, getBestPrice
 from inc.contracts import userContracts, userTrades
@@ -33,6 +33,12 @@ def enableCORSAfterRequestHook():
     response.headers['Access-Control-Allow-Origin'] = CORS_ORIGIN
     response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, OPTIONS'
     response.headers['Access-Control-Allow-Headers'] = 'Origin, Accept, Content-Type, X-Requested-With, X-CSRF-Token'
+
+
+def guardRate():
+    """Per-IP rate-limit для публичных входов. Превышение → 429."""
+    if not rateAllow(request.remote_addr or '?'):
+        abort(429, 'Too Many Requests')
 
 
 def jsonBody():
@@ -196,6 +202,7 @@ def saldo():
 @route('/signup', method=['OPTIONS', 'POST'])
 @enable_cors
 def signup():
+    guardRate()
     body = jsonBody()
     if not body:
         abort(400, 'Bad Request: ожидается JSON-тело')
@@ -233,6 +240,7 @@ def counters(ticker):
 @post('/user', method=['OPTIONS', 'POST'])
 @enable_cors
 def user():
+    guardRate()
     body = jsonBody()
     if not body:
         abort(400, 'Bad Request: ожидается JSON-тело')
@@ -259,6 +267,7 @@ def user():
 @route('/order', method=['OPTIONS', 'POST'])
 @enable_cors
 def order():
+    guardRate()
     body = jsonBody()
     if not body:
         abort(400, 'Bad Request: ожидается JSON-тело')

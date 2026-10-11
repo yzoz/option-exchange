@@ -1,9 +1,12 @@
 from pymongo import MongoClient
 from bson.objectid import ObjectId
-import time, random, json, math, scipy.stats, requests
-client = MongoClient('localhost:27017')
-client.admin.authenticate('', '')
-db = client.exchange
+import os, sys, time, random, json, math, scipy.stats, requests
+
+# Креды/хост — из .env через настройки API (хардкод ''/'' убран).
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'api'))
+from inc.settings import modb
+
+db = modb()
 orders = db.orders
 
 def findBest(type):

@@ -1,9 +1,11 @@
 # RUNBOOK — как поднять YZoZ Option Exchange с нуля
 
-> **Статус документа.** Обновлён после Этапа 1 ТЗ (задачи 1–8): конфиг в `.env`,
+> **Статус документа.** Обновлён после Этапа 1 ТЗ (задачи 1–12): конфиг в `.env`,
 > хранилища через `docker compose`, пароль (PBKDF2) вместо seed, API на
 > `API_PORT`, фронт берёт адрес API из `API_URL`, Bybit вместо Poloniex,
-> `_cache` необязателен. Исторические детали прежнего запуска (ручной
+> `_cache` необязателен, зависимости Node зафиксированы (Express 4.x),
+> rate-limit на публичные входы, секреты вычищены из git-истории и ротированы.
+> Исторические детали прежнего запуска (ручной
 > `docker run`, патч `theo()`, раннер `/tmp`, правка JS на порт 69) больше не
 > нужны — они остались в git-истории. См. также `docs/DONE.md` (что сделано) и
 > `docs/DEVELOPER_GUIDE.md` §7 (архитектура и карта портов).
@@ -94,7 +96,8 @@ docker compose up -d
 - `mongo:6.0` — контейнер `eq-mongo`, креды из `MONGO_USER`/`MONGO_PASSWORD`;
 - `memcached:1.6` (`-m 64`) — `eq-memcached`;
 - `influxdb:1.8` — `eq-influx`, базы `orders`/`trades`/`spot` создаются
-  автоматически (`INFLUXDB_DATABASES`).
+  автоматически init-скриптом `docker/influx-init.iql`
+  (`/docker-entrypoint-initdb.d/`).
 
 Проверка, что всё живо:
 
@@ -116,13 +119,19 @@ InfluxDB 2.x (Flux/токены).
 
 ## 3. Базы InfluxDB
 
-С `docker compose` их создавать **не нужно** — `INFLUXDB_DATABASES` в compose уже
-включает `orders,trades,spot`. Проверить:
+С `docker compose` их создавать **не нужно** — init-скрипт
+`docker/influx-init.iql` (монтируется в `/docker-entrypoint-initdb.d/`) создаёт
+`orders`, `trades`, `spot` при **первом** старте контейнера. Проверить:
 
 ```bash
 curl -s "localhost:8086/query?q=SHOW+DATABASES" | head -c 400
 ```
 
+🪨 **`INFLUXDB_DATABASES` не работает** в образе `influxdb:1.8` (это не его
+переменная) — до правки базы не создавались автоматически, хотя доки это
+утверждали. Теперь используется штатный init-скрипт. Если том `influx-data` уже
+существовал (init не запускается), пересоздайте:
+`docker compose down && docker volume rm option-exchange_influx-data && docker compose up -d`.
 🪨 **Если поднимали Influx вручную (без compose)** и забыли создать базы, симптом
 такой: регистрация и балансы работают, а **любой ордер падает HTTP 500** с
 `InfluxDBClientError: 404 database not found: "orders"`. Создайте вручную:
@@ -208,10 +217,10 @@ npm install
 node ./bin/www
 ```
 
-🪨 **Про `npm install`.** `package-lock.json` закоммичен, но в `package.json`
-часть версий всё ещё `"latest"`, из-за чего lock фиксирует **Express 5.3** под код,
-писавшийся под Express 4. На практике заводится (совместимость `app.use(router)`,
-`res.render`, `res.redirect`), но хрупко — фиксация версий это задача ТЗ **#9**.
+🪨 **Про `npm install`.** Версии в `package.json` зафиксированы (Express **4.x**,
+`body-parser` 1.x, `pug` 2.x и т.д. — задача ТЗ **#9** закрыта), `package-lock.json`
+закоммичен и фиксирует Express **4.22.3**. Код писался под Express 4 — теперь
+совпадает.
 
 **Связь фронта с API** задаётся в `.env` (`API_URL`) — правка JS, как раньше, не
 нужна.
@@ -283,6 +292,8 @@ print(post('/user', {'user': KEY, 'password': PW, 'hmac': mac('balances'),
 | `docker: permission denied` | нет прав на docker | добавить пользователя в группу `docker` |
 | Графики 404 на `/info/*` | `public/img/*` не сгенерированы | нормально (ТЗ #32) |
 | `jquery-ui.css` 404 | файл в `.gitignore` | нормально (ТЗ #33) |
+| `/user`, `/order`, `/signup` → **HTTP 429** | сработал rate-limit | подождать `RATE_WINDOW` или поднять `RATE_MAX` / `RATE_LIMIT=0` |
+| Ордер → **500** сразу после чистой установки Memcached | устаревший код: `currencys` читался на импорте | исправлено (ленивый `_currencys()`); обновите код |
 
 ---
 
@@ -349,13 +360,16 @@ cd api && python utils/robo.py
 Эти шаги из ранних версий RUNBOOK больше **не выполняются**:
 
 - ручной `docker run` для Mongo/Memcached/Influx → `docker compose up -d`;
-- ручное создание БД Influx → авто (`INFLUXDB_DATABASES`);
+- ручное создание БД Influx → init-скрипт (`docker/influx-init.iql`); переменная
+  `INFLUXDB_DATABASES` в image 1.8 не работала (см. §3);
 - создание `_cache/ETH_BTC_PRICE` и `_cache/ETH_BTC_HV_7` вручную → Bybit;
 - патч `api/inc/calculation.py` (guard `theo()`) → задача #8 закрыта;
 - запуск API через раннер `/tmp/oe-dev/run_api.py` на 6969 → `API_PORT`;
-- правка `public/javascripts/exchange.js` (`localhost:69`) → `API_URL`;
-- seed как секрет/HMAC-ключ → пароль (PBKDF2) + HMAC по паролю.
+- правка `public/javascripts/exchange.js` (`localhost:69`) → `API_URL`
+  (dev-fallback теперь `localhost:6969`);
+- seed как секрет/HMAC-ключ → пароль (PBKDF2) + HMAC по паролю;
+- `"latest"` в `package.json` → фиксированные версии Express 4.x (#9);
+- креды `ad`/`pass` в коде/истории → `.env` + ротация + чистка истории (#12).
 
-Осталось из ТЗ (кратко): **#9** (фиксация версий Express 4.x), **#12** (чистка
-git-истории), **#17** (актуальные серии), **#32** (графики). Полный список —
-`docs/SPEC.md`.
+Осталось из ТЗ: **#17** (актуальные серии), **#32** (графики), Этап 2 (P1) и
+Этап 3 (P2). Полный список — `docs/SPEC.md`.

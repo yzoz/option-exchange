@@ -8,7 +8,10 @@ orders = modb().orders
 users = modb().users
 contracts = modb().contracts
 
-currencys = getCurrencys()
+def _currencys():
+    """Актуальный список валют из Memcached (а не снимок на момент импорта)."""
+    return getCurrencys() or []
+
 
 def allUsers():
     cursor = users.find({})
@@ -27,7 +30,7 @@ def realisedPL(user, assets):
     cursor = contracts.find({'user': user})
     pl = {}
     allready = {}
-    for currency in currencys:
+    for currency in _currencys():
         pl[currency] = 0
     for asset in assets:
         allready[asset] = {}
@@ -73,14 +76,14 @@ def realisedPL(user, assets):
         else:
             allready[asset]['quant'] = quant
             allready[asset]['amount'] = amount
-    for currency in currencys:
+    for currency in _currencys():
         pl[currency] = int(round(pl[currency]))
     return pl
 
 def clearContracts(user, clearingPrice):
     cursor = getContracts(user)
     pl = {}
-    for currency in currencys:
+    for currency in _currencys():
         pl[currency] = 0
     for doc in cursor:
         asset = doc['_id']
@@ -128,7 +131,7 @@ def checkContracts(user, assets):
     sellLock = {}
     buyLock = {}
     prize = {}
-    for currency in currencys:
+    for currency in _currencys():
         sellLock[currency] = 0
         buyLock[currency] = 0
         prize[currency] = 0
@@ -160,7 +163,7 @@ def checkContracts(user, assets):
 def checkOrders(user):
     sellLock = {}
     buyLock = {}
-    for currency in currencys:
+    for currency in _currencys():
         sellLock[currency] = 0
         buyLock[currency] = 0
     cursor = orders.find({
@@ -205,7 +208,7 @@ def userBalances(user, assets):
     lockOrders = checkOrders(user)
     lockContracts = checkContracts(user, assets)
     _available = {}
-    for currency in currencys:
+    for currency in _currencys():
         _available[currency] = balances['own'][currency] + lockOrders['orders']['sell'][currency] + lockOrders['orders']['buy'][currency] + lockContracts['contracts']['sell'][currency] + lockContracts['contracts']['buy'][currency] + lockContracts['realised'][currency]
     available = {'available': _available}
     full = {**balances, **lockOrders, **lockContracts, **available}

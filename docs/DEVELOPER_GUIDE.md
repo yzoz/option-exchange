@@ -142,9 +142,11 @@
 option-exchange/
 ├── app.js                     # Express: сборка приложения, монтирование роутов
 ├── bin/www                    # Точка входа Node: создание HTTP(S)-сервера, порты
-├── package.json               # Зависимости Node (версии не зафиксированы: "latest" — см. проблемы)
+├── package.json               # Зависимости Node (версии зафиксированы: Express 4.x, см. §9)
 ├── requirements.txt           # Зависимости Python-API (в т.ч. python-dotenv, ecdsa)
 ├── docker-compose.yml         # Mongo + Memcached + InfluxDB 1.8 одной командой
+├── docker/
+│   └── influx-init.iql        # Автосоздание баз orders/trades/spot (init-скрипт InfluxDB)
 ├── .env.example / .env        # Конфиг (.env не коммитится) — см. §7
 ├── nodemon.json               # Настройки nodemon (dev-режим)
 ├── README.md                  # 2 строки описания архитектуры
@@ -450,6 +452,10 @@ PBKDF2, затем `checkHMAC(password, question, hmac)` (Python `hmac` + `sha3_
 
 > HMAC считается по **паролю** (не по seed). Пароль передаётся в теле каждого
 > запроса. `edit` пока возвращает `501` (задача ТЗ #14).
+>
+> `/signup`, `/user`, `/order` защищены **per-IP rate-limit** (задача #11):
+> при превышении `RATE_MAX` за `RATE_WINDOW` секунд → **HTTP 429**. Настройки —
+> `RATE_LIMIT`/`RATE_WINDOW`/`RATE_MAX` в `.env`; `api/inc/utils.py:rateAllow()`.
 
 **Админский (⚠ требует `ADMIN_TOKEN`):**
 
@@ -468,8 +474,9 @@ PBKDF2, затем `checkHMAC(password, question, hmac)` (Python `hmac` + `sha3_
 Конфиг — в `.env` (скопировать из `.env.example`). Ключевые моменты:
 
 1. **Хранилища:** `cp .env.example .env && docker compose up -d` (Mongo, Memcached,
-   InfluxDB **1.8**). Базы InfluxDB `orders`/`trades`/`spot` создаются автоматически
-   (`INFLUXDB_DATABASES`).
+   InfluxDB **1.8**). Базы InfluxDB `orders`/`trades`/`spot` создаются init-скриптом
+   `docker/influx-init.iql` при первом старте (`INFLUXDB_DATABASES` в image 1.8
+   не работает — см. RUNBOOK §3). Креды — из `.env` (`MONGO_*`, `INFLUX_*`).
 2. **Кэш рыночных данных (необязателен):** `_cache/<TICKER>_PRICE` и
    `_cache/<TICKER>_HV_7` имеют приоритет, но при их отсутствии цена и HV берутся
    с **Bybit** public API. API не падает без `_cache`.
@@ -517,8 +524,8 @@ PBKDF2, затем `checkHMAC(password, question, hmac)` (Python `hmac` + `sha3_
 Полный аудит и приоритезированный план — в `docs/SPEC.md`. Что уже закрыто —
 `docs/DONE.md`. Оставшееся критичное:
 
-- 🔴 **Секреты в git-истории** (`ad/pass`, Influx) — в текущем коде вынесены в `.env`,
-  но историю нужно чистить и креды ротировать (задача #12).
+- ✅ ~~Секреты в git-истории~~ — история переписана (`git filter-repo`), креды
+  ротированы, из кода убраны дефолты `ad`/`pass` (задача #12).
 - ✅ ~~Админский роут `/admin/clear/...` открыт всем~~ — теперь требует `ADMIN_TOKEN`
   (задача #4).
 - ✅ ~~`api/inc/address.py` печатает ключи при импорте~~ — переделан в CLI (задача #3).
@@ -527,8 +534,10 @@ PBKDF2, затем `checkHMAC(password, question, hmac)` (Python `hmac` + `sha3_
 - ✅ ~~Секрет пользователя в plaintext~~ — пароль хранится как PBKDF2 (задача #5).
 - ✅ ~~Нет атомарности в матчинге~~ — per-тикерная блокировка + атомарный
   `matchOrder` (задача #6). Ограничение: только в пределах одного процесса.
-- 🟠 **Зависимости с `"latest"`** в `package.json` → ставится Express 5.x под код
-  Express 4.x (задача #9, `package-lock.json` пока не фиксирует).
+- ✅ ~~Зависимости с `"latest"`~~ — зафиксированы Express 4.x, lock перегенерирован
+  (задача #9).
+- ✅ ~~Открытый CORS / нет rate-limit~~ — конкретный origin + per-IP лимит на
+  `/signup`, `/order`, `/user` (задача #11). Ограничение: локально для процесса.
 - ✅ ~~`robo.py`/`setCurrent()` тянут мёртвый Poloniex~~ — переведены на Bybit
   public API; `_cache` стал необязательным (задача #7).
 - 🟠 **`tests/mongotest.py` — не автотест**, бьёт по реальной БД и API (общий e2e — `tests/e2e.py`, §0.3.1).

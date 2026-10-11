@@ -16,6 +16,7 @@
 | 2026-10-11 | Этап 1, задачи 1–5 (P0) + сопутствующий запуск | #1, #2, #3, #4, #5; частично #8, #10, #11 | ✅ e2e проверено |
 | 2026-10-11 | Этап 1, задачи 6–8 (P0) — атомарность, Bybit, `theo()` | #6, #7, #8 | ✅ e2e проверено |
 | 2026-10-11 | Синхронизация `RUNBOOK.md` с текущим кодом + правила сопровождения доков | — (док) | ✅ |
+| 2026-10-12 | Этап 1, задачи 9–12 — зависимости, старт API, CORS/rate-limit, чистка секретов | #9, #10, #11, #12 | ✅ e2e проверено |
 
 ---
 
@@ -438,3 +439,126 @@ npm install && node ./bin/www &        # веб :3000
 **Ограничения:** `matplotlib` для графиков (`robo.py`) в `requirements.txt` нет —
 это осознанно (тяжёлая зависимость, задача #32). `package-lock.json` фиксирует
 Express 5.3 (задача #9 открыта) — отмечено в RUNBOOK §7.
+
+---
+
+## 2026-10-12 — Этап 1, задачи 9–12
+
+Закрыты оставшиеся P0/P1-задачи Этапа 1: фиксация зависимостей (#9), хвосты
+запуска API (#10), CORS + rate-limit (#11) и чистка секретов из git-истории с
+ротацией кредов (#12). По ходу выявлены и исправлены две скрытые проблемы
+инфраструктуры (см. ниже).
+
+### Задача 9 — Зафиксировать зависимости 🟠
+
+**Файлы:** `package.json`, `package-lock.json` (перегенерирован), `docs/RUNBOOK.md`.
+
+- Все `"latest"` убраны, версии прибиты к мажору, совместимому с кодом под
+  Express 4: `express ^4.21.2`, `body-parser ^1.20.3`, `pug ^2.0.4`,
+  `morgan ^1.10.0`, `cookie-parser ^1.4.7`, `less-middleware ^3.1.0`,
+  `serve-favicon ^2.5.0`, `sentencer ^0.2.1`, `debug ^4.3.4`, `dotenv ^17.2.3`.
+- `package-lock.json` перегенерирован (`rm -rf node_modules package-lock.json &&
+  npm install`) — теперь фиксирует **Express 4.22.3** и body-parser 1.20.8
+  (было Express 5.3).
+- `scripts.start` вёл на `nodemon` (dev-only) → заменён на `node ./bin/www`;
+  `nodemon` остаётся для ручного dev-запуска (`nodemon.json` не трогали).
+
+**Как проверялось:** веб-слой поднят (`node ./bin/www`) — `GET /` → 200,
+`GET /exchange/` → 302 (редирект на стол).
+
+### Задача 10 — Починить старт API 🟠
+
+Фактически была закрыта ещё в блоке 1–5 (`API_PORT`, WSGI-ветка, `API_SERVER`
+из `API_URL`). В этом блоке убран последний «шов» старой схемы:
+
+- `public/javascripts/exchange.js`: fallback `'http://localhost:69'` →
+  `'http://localhost:6969'` (порт API по умолчанию). Прод-режим и так берёт
+  адрес из `window.API_SERVER`.
+
+### Задача 11 — CORS / rate-limit 🟠
+
+**Файлы:** `api/inc/utils.py`, `api/app.py`, `.env`, `.env.example`.
+
+- CORS уже ограничен конкретным `CORS_ORIGIN` (не `*`) в блоке 1–5. Декоратор
+  `enable_cors` оставлен как was (обрабатывает preflight `OPTIONS`).
+- Добавлен **per-IP rate-limit** (`rateAllow()` в `utils.py`): скользящее окно,
+  in-memory на процесс. Применяется к публичным входам `/signup`, `/order`,
+  `/user` через `guardRate()`. Превышение → **HTTP 429**.
+- Настройки: `RATE_LIMIT` (0 — выключить), `RATE_WINDOW` (сек), `RATE_MAX`
+  (запросов на IP за окно). Дефолты в `.env.example` — включён, 60 c / 120.
+
+**Подводные камни:**
+
+- Лимитер локальный для процесса — как и блокировка матчинга (#6). При
+  нескольких воркерах нужен внешний счётчик (Memcached/Redis) — вне этой задачи.
+- За прокси `request.remote_addr` — это адрес прокси; для реального IP нужен
+  `X-Forwarded-For` (осознанно не реализовано).
+
+### Задача 12 — Чистка секретов в git-истории + ротация 🟠
+
+**Файлы:** `api/inc/settings.py`, `tests/mongotest.py`, `docker-compose.yml`,
+`.env`, `.env.example`, `docker/influx-init.iql` (новый); история git переписана.
+
+Что было в истории (`git log -p`, все коммиты):
+
+- `api/inc/settings.py` — `inUser = ''`, `inPwd = ''`, `moUser = ''`,
+  `moPwd = ''` (и позже как дефолты `_env(...)`).
+- `api/inc/address.py` — приватный ключ `privT = '40b73a...2a13'`.
+
+Что сделано:
+
+- **История переписана** `git filter-repo --replace-text` (файл замен):
+  `-> ''` → пустые строки (в старых версиях — `''`, в `_env`-дефолтах — `''`),
+  hex-ключ `privT` → `'0'*64` (невалидный). Переписан **весь** репозиторий,
+  затем `git push --force` в `origin/master` (`git@github.com:yzoz/option-exchange.git`).
+- **Креды ротированы** в `.env` (dev): `MONGO_USER=yzoz_admin`,
+  `MONGO_PASSWORD=yzoz-mongo-dev-pass`, `INFLUX_USER=yzoz_admin`,
+  `INFLUX_PASSWORD=yzoz-influx-dev-pass`, `ADMIN_TOKEN=dev-admin-2b1f7c9a4e`.
+  `.env.example` — плейсхолдеры `change-me-*` (для прода — заменить).
+- **Хардкод `''/''` убран и из кода-дефолтов**: `settings.py` теперь
+  `_env('MONGO_USER', '')` и т.п.; `modb()` подключается без auth, если креды не
+  заданы (dev). `docker-compose.yml` дефолты — новые плейсхолдеры.
+- `tests/mongotest.py`: `client.admin.authenticate('','')` (метод вообще
+  отсутствует в pymongo 4) → подключение через `inc.settings.modb()`.
+
+**Подводные камни:**
+
+- Старые клоны с коммитами `458e065`/`17a7b15` сохраняют секреты в истории —
+  force-push их не стирает у пользователей. Креды всё равно ротированы, поэтому
+  утечка обесценена.
+- `ad`/`pass` были **только** dev-дефолты по умолчанию (`.env.example`), но
+  задача требует считать их скомпрометированными.
+
+### Побочные исправления инфраструктуры (выявлены при ротации)
+
+1. **`INFLUXDB_DATABASES` не существует** в образе `influxdb:1.8` — базы
+   `orders/trades/spot` на самом деле **не создавались автоматически**, вопреки
+   `docker-compose.yml` и докам. Прежний стек работал лишь потому, что БД были
+   созданы руками раньше. Исправлено: `docker/influx-init.iql` монтируется в
+   `/docker-entrypoint-initdb.d/init.iql` (штатный механизм образа). Проверено:
+   после `docker compose down && rm volume && up -d` базы создаются.
+2. **`users.py` читал `currencys = getCurrencys()` на импорте** — до того, как
+   `app.py` успевал вызвать `setCurrencys(['ETH','BTC'])`. На «холодном»
+   Memcached это давало `TypeError: 'NoneType' object is not iterable` на любом
+   `/user?balances`. Работало раньше только из-за незачищенного Memcached.
+   Исправлено: ленивый `_currencys()` в момент использования.
+
+**Как проверялось (e2e):**
+
+- Стек пересоздан `docker compose down -v`-эквивалентом: хранилища подняты с
+  нуля новыми кредами; Influx-базы созданы init-скриптом; `_cache` был удалён —
+  API стартовал и отдал `/counters/ETH_BTC` (Bybit-ветка либо прежний `_cache`).
+- `python -m py_compile` по всем затронутым `.py`, `node --check` по `exchange.js`
+  и `tests/e2e.py` — чисто; `docker compose config --quiet` — OK.
+- `.venv/bin/python tests/e2e.py` — **21 проверка, 0 провалов**, включая новую
+  `[6] серия запросов -> HTTP 429` (rate-limit).
+- Веб: `node ./bin/www` на Express 4.22.3 — `GET /` → 200, `/exchange/` → 302.
+
+### Ограничения / что осталось
+
+- Rate-limit и блокировка матчинга — только в пределах процесса (multi-worker —
+  отдельная задача).
+- `RATE_LIMIT`/`RATE_WINDOW`/`RATE_MAX` в `.env.example` — дефолты; прод —
+  подстроить.
+- `seed` по-прежнему хранится открытым текстом (осознанно, см. задачу #5).
+- Этап 2 (P1) и Этап 3 (P2) — не начаты. Полный список — `docs/SPEC.md`.

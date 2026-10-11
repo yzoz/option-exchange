@@ -9,8 +9,8 @@ services:
     ports:
       - "${MONGO_PORT:-27017}:27017"
     environment:
-      MONGO_INITDB_ROOT_USERNAME: ${MONGO_USER:-ad}
-      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD:-pass}
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_USER:-yzoz_admin}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD:-change-me-mongo-password}
     volumes:
       - mongo-data:/data/db
     healthcheck:
@@ -35,10 +35,10 @@ services:
       - "${INFLUX_PORT:-8086}:8086"
     environment:
       INFLUXDB_HTTP_AUTH_ENABLED: "false"
-      # Автосоздание баз при старте (orders/trades/spot).
-      INFLUXDB_DATABASES: orders,trades,spot
     volumes:
       - influx-data:/var/lib/influxdb
+      # Автосоздание баз orders/trades/spot при первом старте.
+      - ./docker/influx-init.iql:/docker-entrypoint-initdb.d/init.iql:ro
     healthcheck:
       test: ["CMD", "curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", "http://localhost:8086/ping"]
       interval: 10s

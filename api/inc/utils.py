@@ -61,3 +61,33 @@ def checkHMAC(seed, question, yourHMAC):
         return True
     else:
         return False
+
+
+# --- Простой per-IP rate-limit (in-memory) -----------------------------------
+# Защищает публичные входы (/signup, /order, /user) от перебора/флуда.
+# Ограничение локальное для процесса — как и блокировка матчинга (см. DONE.md):
+# при нескольких воркерах нужен внешний счётчик (Redis/Memcached). Опционально
+# отключается RATE_LIMIT=0.
+import threading
+
+RATE_LIMIT = os.getenv('RATE_LIMIT', '1') != '0'
+RATE_WINDOW = float(os.getenv('RATE_WINDOW', '60'))
+RATE_MAX = int(os.getenv('RATE_MAX', '120'))
+
+_rateHits = {}
+_rateGuard = threading.Lock()
+
+
+def rateAllow(client, weight=1):
+    """True, если запрос от client разрешён. Скользящее окно RATE_WINDOW сек."""
+    if not RATE_LIMIT:
+        return True
+    now = time.time()
+    with _rateGuard:
+        hits = [t for t in _rateHits.get(client, []) if now - t < RATE_WINDOW]
+        if len(hits) + weight > RATE_MAX:
+            _rateHits[client] = hits
+            return False
+        hits.append(now)
+        _rateHits[client] = hits
+    return True

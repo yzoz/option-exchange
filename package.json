@@ -3,18 +3,18 @@
   "version": "0.0.0",
   "private": true,
   "scripts": {
-    "start": "nodemon ./bin/www"
+    "start": "node ./bin/www"
   },
   "dependencies": {
-    "body-parser": "latest",
-    "cookie-parser": "latest",
-    "debug": "latest",
+    "body-parser": "^1.20.3",
+    "cookie-parser": "^1.4.7",
+    "debug": "^4.3.4",
     "dotenv": "^17.2.3",
-    "express": "latest",
-    "less-middleware": "latest",
-    "morgan": "latest",
-    "pug": "latest",
-    "sentencer": "latest",
-    "serve-favicon": "latest"
+    "express": "^4.21.2",
+    "less-middleware": "^3.1.0",
+    "morgan": "^1.10.0",
+    "pug": "^2.0.4",
+    "sentencer": "^0.2.1",
+    "serve-favicon": "^2.5.0"
   }
 }

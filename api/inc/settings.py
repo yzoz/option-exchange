@@ -34,7 +34,11 @@ moDB = _env('MONGO_DB', 'exchange')
 
 
 def modb():
-    uri = 'mongodb://%s:%s@%s:%s/?authSource=admin' % (moUser, moPwd, moHost, moPort)
+    # Без кредов в .env — подключаемся без auth (dev). Креды задаются в .env.
+    if moUser and moPwd:
+        uri = 'mongodb://%s:%s@%s:%s/?authSource=admin' % (moUser, moPwd, moHost, moPort)
+    else:
+        uri = 'mongodb://%s:%s/' % (moHost, moPort)
     cli = MongoClient(uri)
     return cli[moDB]
 
