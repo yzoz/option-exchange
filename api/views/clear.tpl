@@ -18,7 +18,7 @@
 for balance in balances:
 trades =  str(balance['trades']).replace('{', '<br />')
 %>
-User: {{balance['hash']}} | {{balance['seed']}}<br />
+User: {{balance['hash']}}<br />
 Own: {{balance['balance']['own']}}<br />
 Orders: {{balance['balance']['orders']}}<br />
 Contracts: {{balance['balance']['contracts']}}<br />

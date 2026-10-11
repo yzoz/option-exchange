@@ -1,0 +1,15 @@
+# Python-зависимости API. Установка: pip install -r requirements.txt
+# Проверено на Python 3.10. pymongo держим <4 — см. docs/RUNBOOK.md §6.
+pymongo<4
+influxdb
+python-memcached
+python-dotenv
+scipy
+pandas
+six
+requests
+schedule
+bottle
+# Для CLI api/inc/address.py (генерация ключей, вне рантайма приложения):
+ecdsa
+pysha3

@@ -4,34 +4,36 @@
  * Module dependencies.
  */
 var fs = require('fs')
+require('dotenv').config()
 var app = require('../app')
 var debug = require('debug')('yzoz:server')
 var http = require('http')
 var https = require('https')
 
 if (app.locals.appStatus == 'production') {
-  var host = '0.0.0.0'
+  var host = process.env.WEB_HOST || '0.0.0.0'
 }
 else {
-  var host = 'localhost'
+  var host = process.env.WEB_HOST || 'localhost'
 }
 
 if (app.locals.appStatus == 'production'){
+  var httpPort = normalizePort(process.env.WEB_HTTP_PORT || '80')
   http.createServer(function(req, res) {   
     res.writeHead(301, {"Location": "https://" + req.headers['host'] + req.url})
     res.end()
-  }).listen(80)
-  
+  }).listen(httpPort)
+
   var server = https.createServer({ 
-    key: fs.readFileSync("/etc/letsencrypt/live/yzoz.com/privkey.pem"),
-    cert: fs.readFileSync("/etc/letsencrypt/live/yzoz.com/fullchain.pem")
+    key: fs.readFileSync(process.env.TLS_KEY_PATH),
+    cert: fs.readFileSync(process.env.TLS_CERT_PATH)
   }, app)
 
-  var port = normalizePort(process.env.PORT || '443')
+  var port = normalizePort(process.env.WEB_PORT || '443')
 }
 else {
   var server = http.createServer(app)
-  var port = normalizePort(process.env.PORT || '80')
+  var port = normalizePort(process.env.WEB_PORT || '3000')
 }
 
 app.set('port', port)

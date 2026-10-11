@@ -1,8 +1,23 @@
-from bson.objectid import ObjectId
-from .orders import alreadyOrders, getBestPrice, sendLimit, getLimit, removeOrder, editQuant
+import threading
+from .orders import alreadyOrders, getBestPrice, sendLimit, matchOrder
 from .contracts import alreadyContracts, makeDeal
 from .users import userBalances
 from .mc import upBest
+
+# Пер-тикерные блокировки: сериализуют матчинг в рамках процесса, чтобы два
+# параллельных ордера не выкупали одну и ту же встречную заявку. Само по себе
+# снятие заявки атомарно (см. orders.matchOrder), блокировка убирает гонку
+# между проверкой баланса и сделкой.
+_locks = {}
+_locks_guard = threading.Lock()
+
+def tickerLock(ticker):
+    with _locks_guard:
+        lock = _locks.get(ticker)
+        if lock is None:
+            lock = threading.Lock()
+            _locks[ticker] = lock
+        return lock
 
 def checkOrder(base, unit, ticker, exp, strike, dude, user, type, quant, asset, price, assets):
     allContracts = alreadyContracts(user)
@@ -44,101 +59,37 @@ def checkOrder(base, unit, ticker, exp, strike, dude, user, type, quant, asset, 
 
 def sendOrder(base, unit, ticker, exp, strike, dude, user, type, quant, asset, price, assets):
     out = 'User ' + str(user) + ' wants eat ' + str(quant) + ' of ' + str(asset) + ' for ' + str(price) + '\n'
-    send = checkOrder(base, unit, ticker, exp, strike, dude, user, type, quant, asset, price, assets)
-    if send:
-        if (type == 'sell'):
+    with tickerLock(ticker):
+        send = checkOrder(base, unit, ticker, exp, strike, dude, user, type, quant, asset, price, assets)
+        if not send:
+            return 'No Money!'
+        if type == 'sell':
             oppType = 'buy'
         else:
             oppType = 'sell'
         bestPrice = getBestPrice(oppType, asset)
-        #If I Sell, bestPrice (bid) must be < then my price, to place limit order, else I place market order
-        #But if I want to buy, best ask must be > then my price, to send limit
-        if (type == 'sell'):
+        # Sell ставит лимит, если ask выше лучшего bid; Buy — если bid ниже
+        # лучшего ask. Иначе цена выгодна и заявка сводится со встречными.
+        if type == 'sell':
             dir = price - bestPrice
         else:
             dir = bestPrice - price
-        if (dir > 0):
-            limit = sendLimit(ticker, exp, strike, dude, user, type, quant, asset, price)
-            out = out + limit
+        if dir > 0:
+            out = out + sendLimit(ticker, exp, strike, dude, user, type, quant, asset, price)
             upBest(asset, type, getBestPrice(type, asset))
-        else:
-            machOrders = getLimit(oppType, asset, price)
-            for oppOrder in machOrders:
-    
-                oppUser = oppOrder['user']
-                oppQuant = oppOrder['quant']
-                oppPrice = oppOrder['price']
-                oppId = ObjectId(oppOrder['_id'])
-                optTime = oppOrder['time']
-    
-                if (user == oppUser):
-    
-                    remove = removeOrder(ticker, exp, strike, dude, oppId, oppUser, oppType, oppQuant, asset, oppPrice)
-    
-                    out = out + remove
-                    out = out + 'I\'m Stupid!\n'
-                    
-                    upBest(asset, oppType, getBestPrice(oppType, asset))
-    
-                    continue
-    
-                if (quant > oppQuant):
-    
-                    out = out + 'Food ' + 'from ' + str(oppUser) + ' User with ' + str(oppQuant) + ' of ' + str(asset) + ' for ' +  str(oppPrice) + ' in ' + str(optTime) + '\n'
-    
-                    make = makeDeal(ticker, exp, strike, dude, user, oppUser, type, oppQuant, asset, oppPrice)
-                    out = out + make
-    
-                    remove = removeOrder(ticker, exp, strike, dude, oppId, oppUser, oppType, oppQuant, asset, oppPrice)
-    
-                    quant-=oppQuant
-    
-                    out = out + remove
-                    out = out + 'Stay eat: ' + str(quant) + '\n'
-                    
-                    upBest(asset, oppType, getBestPrice(oppType, asset))
-    
-                elif (quant == oppQuant):
-    
-                    out = out + 'Best Food ' + 'from ' + str(oppUser) + 'User with ' + str(oppQuant) + ' of ' + str(asset) + ' for ' + str(oppPrice) + ' in ' + str(optTime) + '\n'
-    
-                    make = makeDeal(ticker, exp, strike, dude, user, oppUser, type, oppQuant, asset, oppPrice)
-                    out = out + make
-    
-                    remove = removeOrder(ticker, exp, strike, dude, oppId, oppUser, oppType, oppQuant, asset, oppPrice)
-    
-                    quant = 0
-    
-                    out = out + remove
-                    
-                    upBest(asset, oppType, getBestPrice(oppType, asset))
-    
-                    break
-    
-                else:
-    
-                    out = out + 'Last food: ' + 'from ' + str(oppUser) + ' User with ' + str(oppQuant) + ' of ' + str(asset) + ' for ' + str(oppPrice) + ' in ' + str(optTime) + '\n'
-    
-                    make = makeDeal(ticker, exp, strike, dude, user, oppUser, type, quant, asset, oppPrice)
-                    out = out + make
-    
-                    oppQuant-=quant
-                    out = out + 'Leave over: ' + str(oppQuant) + '\n'
-                    edit = editQuant(ticker, exp, strike, dude, oppId, oppUser, oppType, oppQuant, asset, oppPrice)
-    
-                    quant = 0
-    
-                    out = out + edit
-    
-                    break
-    
-            if (quant > 0):
-    
-                limit = sendLimit(ticker, exp, strike, dude, user, type, quant, asset, price)
-    
-                out = out + limit
-                
-                upBest(asset, type, getBestPrice(type, asset))
-    else:
-        out = 'No Money!'
+            return out
+        while quant > 0:
+            oppOrder, taken = matchOrder(ticker, exp, strike, dude, oppType, asset, price, quant, user)
+            if oppOrder is None:
+                break
+            oppUser = oppOrder['user']
+            oppPrice = oppOrder['price']
+            out = out + 'Food from ' + str(oppUser) + ' User with ' + str(taken) + ' of ' + str(asset) + ' for ' + str(oppPrice) + '\n'
+            out = out + makeDeal(ticker, exp, strike, dude, user, oppUser, type, taken, asset, oppPrice)
+            quant -= taken
+            upBest(asset, oppType, getBestPrice(oppType, asset))
+        if quant > 0:
+            out = out + 'Stay eat: ' + str(quant) + '\n'
+            out = out + sendLimit(ticker, exp, strike, dude, user, type, quant, asset, price)
+            upBest(asset, type, getBestPrice(type, asset))
     return out

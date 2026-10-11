@@ -64,6 +64,50 @@ def getAsset(type, asset):
 
 """USER ACTIONS"""
 
+def matchOrder(ticker, exp, strike, dude, oppType, asset, price, quant, user):
+    """Атомарно забрать у встречной заявки min(quant, её объём).
+
+    Возвращает (заявка_до_изменения, взятый_объём) или (None, 0).
+    Заявка удаляется/уменьшается условным запросом (по _id + текущему quant),
+    поэтому одну заявку нельзя выкупить дважды — в т.ч. из параллельных
+    процессов. Свои заявки (user) исключены — самосведение запрещено.
+    """
+    if oppType == 'sell':
+        dir = '$lte'
+        priceOrder = 1
+    else:
+        dir = '$gte'
+        priceOrder = -1
+    while True:
+        cand = orders.find_one({
+            'type': oppType,
+            'asset': asset,
+            'user': {'$ne': user},
+            'price': {dir: price}
+        }, sort=[('price', priceOrder), ('time', 1)])
+        if cand is None:
+            return None, 0
+        candId = cand['_id']
+        oppQuant = cand['quant']
+        if oppQuant <= quant:
+            # Забираем заявку целиком. Условие по quant ловит гонку: если другой
+            # процесс успел её изменить — find_one_and_delete вернёт None, повторяем.
+            taken = orders.find_one_and_delete({'_id': candId, 'quant': oppQuant})
+            if taken is None:
+                continue
+            inOrder(ticker, exp, strike, dude, taken['user'], oppType, oppQuant, taken['price'], 'REMOVE')
+            setState(ticker, exp, 'ORDER', getTime())
+            return taken, oppQuant
+        # Заявка больше нашего объёма — уменьшаем её на взятый объём.
+        taken = orders.find_one_and_update(
+            {'_id': candId, 'quant': oppQuant},
+            {'$set': {'quant': oppQuant - quant}})
+        if taken is None:
+            continue
+        inOrder(ticker, exp, strike, dude, taken['user'], oppType, quant, taken['price'], 'EDIT')
+        setState(ticker, exp, 'ORDER', getTime())
+        return taken, quant
+
 def sendLimit(ticker, exp, strike, dude, user, type, quant, asset, price):
     times = getTime()
     cursor = orders.insert_one({

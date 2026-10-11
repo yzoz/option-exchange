@@ -1,6 +1,6 @@
 from datetime import datetime as dt
 import pandas as pd
-from hashlib import blake2b, sha3_512
+from hashlib import blake2b, sha3_512, pbkdf2_hmac
 import os, time, hmac
 
 def pyMode():
@@ -34,6 +34,24 @@ def hashUser(user):
     b2b.update(req)
     userHash = b2b.hexdigest()
     return userHash
+
+# Пароль пользователя: PBKDF2-HMAC-SHA512, случайная соль.
+# В БД лежит только производное значение — plaintext-секрета нет.
+PBKDF2_ITERATIONS = 200000
+PBKDF2_DKLEN = 32
+
+def hashPassword(password):
+    salt = os.urandom(16).hex()
+    digest = pbkdf2_hmac('sha512', password.encode(), bytes.fromhex(salt),
+                         PBKDF2_ITERATIONS, dklen=PBKDF2_DKLEN)
+    return digest.hex(), salt
+
+def verifyPassword(password, passwordHash, salt):
+    if not passwordHash or not salt:
+        return False
+    digest = pbkdf2_hmac('sha512', password.encode(), bytes.fromhex(salt),
+                         PBKDF2_ITERATIONS, dklen=PBKDF2_DKLEN)
+    return hmac.compare_digest(digest.hex(), passwordHash)
 
 def checkHMAC(seed, question, yourHMAC):
     sex = seed.encode()

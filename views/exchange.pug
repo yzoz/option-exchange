@@ -14,7 +14,9 @@ block content
 			div(class='content')
 				input(type='text' name='key' id='regKey' placeholder='Write You Key on Gen it' title='Somthing random, like a password' required='required')
 				br
-				textarea(name='seed' id='regSeed' placeholder='Think You Seed on Gen it' title='Secret phrase that You know, but incomprehensible to others' required='required')
+				textarea(name='seed' id='regSeed' placeholder='Think You Seed on Gen it' title='Seed phrase — mnemonic, NOT a password' required='required')
+				br
+				input(type='password' name='password' id='regPassword' placeholder='Password (secret)' title='Your secret password — used to sign requests' required='required')
 				br
 				input(type='text' name='email' id='regEmail' placeholder='E-mail (optional)' title='For My news or Your troubles')
 				div(class='buttons')
@@ -27,7 +29,7 @@ block content
 			div(class='content')
 				input(type='text' name='key' id='userKey' placeholder='Key' title='Your Key')
 				br
-				input(type='password' name='user' id='userID' placeholder='Seed' title='Your secret phrase')
+				input(type='password' name='password' id='userPassword' placeholder='Password' title='Your secret password')
 				div(class='buttons')
 					button(onclick='userOrders()') Orders
 					button(onclick='userContracts()') Contracts

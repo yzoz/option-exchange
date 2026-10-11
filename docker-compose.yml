@@ -1,0 +1,50 @@
+# Хранилища для YZoZ Option Exchange. Запуск: docker compose up -d
+# Переменные берутся из .env (см. .env.example). InfluxDB — строго 1.8
+# (python-клиент из кода несовместим с InfluxDB 2.x).
+services:
+  mongo:
+    image: mongo:6.0
+    container_name: eq-mongo
+    restart: unless-stopped
+    ports:
+      - "${MONGO_PORT:-27017}:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_USER:-ad}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD:-pass}
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.runCommand({ping:1}).ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  memcached:
+    image: memcached:1.6
+    container_name: eq-memcached
+    restart: unless-stopped
+    command: -m 64
+    ports:
+      - "${MEMCACHED_PORT:-11211}:11211"
+
+  influx:
+    image: influxdb:1.8
+    container_name: eq-influx
+    restart: unless-stopped
+    ports:
+      - "${INFLUX_PORT:-8086}:8086"
+    environment:
+      INFLUXDB_HTTP_AUTH_ENABLED: "false"
+      # Автосоздание баз при старте (orders/trades/spot).
+      INFLUXDB_DATABASES: orders,trades,spot
+    volumes:
+      - influx-data:/var/lib/influxdb
+    healthcheck:
+      test: ["CMD", "curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", "http://localhost:8086/ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  mongo-data:
+  influx-data:

@@ -1,5 +1,8 @@
 .vscode/
 node_modules/
+.env
+.venv/
+__pycache__/
 public/img/
 public/.well-known
 _cache/

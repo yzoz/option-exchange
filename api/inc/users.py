@@ -21,7 +21,7 @@ def checkUser(userHash):
     if cursor is None:
         return False
     else:
-        return cursor['seed']
+        return cursor
 
 def realisedPL(user, assets):
     cursor = contracts.find({'user': user})

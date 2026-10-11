@@ -1,13 +1,6 @@
-var host = window.location.hostname;
-
-if (host == 'localhost') {
-    var apiServer = 'http://localhost:69';
-    var stateTimer = 5000;
-}
-else {
-    var apiServer = 'https://yzoz.com:8080';
-    var stateTimer = 1000;
-}
+var apiServer = window.API_SERVER || 'http://localhost:69';
+var stateTimer = 5000;
+window.apiServer = apiServer;
 
 var TICKER = $('#ticker').val();
 var EXP = $('#exp').val();
@@ -64,15 +57,15 @@ function getMyKey() {
     return key;
 }
 
-function getMySeed() {
-    var seed = $('#userID').val();
-    return seed;
+function getMyPassword() {
+    var password = $('#userPassword').val();
+    return password;
 }
 
 function getHMAC(question) {
-    seed = getMySeed();
+    password = getMyPassword();
     var shaObjHMAC = new jsSHA('SHA3-512', 'TEXT');
-    shaObjHMAC.setHMACKey(seed, 'TEXT');
+    shaObjHMAC.setHMACKey(password, 'TEXT');
     shaObjHMAC.update(question);
     var hmac = shaObjHMAC.getHMAC("HEX");
     return hmac;
@@ -99,10 +92,12 @@ function genSeed() {
 function signUp() {
     key = $('#regKey').val();
     seed = $('#regSeed').val();
+    password = $('#regPassword').val();
     email = $('#regEmail').val();
     data = {
         'key': key,
         'seed': seed,
+        'password': password,
         'email': email
     };
     $.ajax({
@@ -166,6 +161,7 @@ function userContracts() {
     hmac = getHMAC(question);
     data = {
         'user': key,
+        'password': getMyPassword(),
         'hmac': hmac,
         'question': question
     };
@@ -208,6 +204,7 @@ function userBalances() {
     hmac = getHMAC(question);
     data = {
         'user': key,
+        'password': getMyPassword(),
         'hmac': hmac,
         'question': question
     };
@@ -244,6 +241,7 @@ function userOrders() {
     hmac = getHMAC(question);
     data = {
         'user': key,
+        'password': getMyPassword(),
         'hmac': hmac,
         'question': question
     };
@@ -281,6 +279,7 @@ function userTrades() {
     hmac = getHMAC(question);
     data = {
         'user': key,
+        'password': getMyPassword(),
         'hmac': hmac,
         'question': question
     };
@@ -334,6 +333,7 @@ function orderSend(type, asset) {
     hmac = getHMAC(toHMAC);
     data = {
         'user': key,
+        'password': getMyPassword(),
         'hmac': hmac,
         'question': question
     };
@@ -362,6 +362,7 @@ function orderRemove(id) {
     hmac = getHMAC(toHMAC);
     data = {
         'user': key,
+        'password': getMyPassword(),
         'hmac': hmac,
         'question': question
     };
