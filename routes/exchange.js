@@ -1,39 +1,29 @@
 var express = require('express'),
-	fs = require("fs"),
-	router = express.Router()
+	router = express.Router(),
+	instruments = require('../lib/instruments')
+
+// Разбор каталога инструментов вынесен в lib/instruments.js (задача ТЗ #23) —
+// здесь остаётся только HTTP-логика страницы торгового стола.
 
 router.get('/', (req, res) => {
-	res.redirect('/exchange/eth/btc/1519862400')
+	res.redirect('/exchange/eth/btc/' + instruments.firstExp('ETH_BTC'))
 })
 
 router.get('/:token/:unit/:exp', (req, res) => {
-	exp = req.params.exp
-	token = req.params.token
-	unit = req.params.unit
-	ticker = token + '_' + unit
-	ticker = ticker.toUpperCase()
+	var exp = req.params.exp
+	var token = req.params.token
+	var unit = req.params.unit
+	var ticker = (token + '_' + unit).toUpperCase()
 
-	file = fs.readFileSync('./exchange/instruments.json')
-	
-	var intruments = JSON.parse(file)
-	
-	for (instrument in intruments) {
-		ass = intruments[instrument][ticker]
-		if (ass) {
-			name = ass.name
-			size = ass.size
-			measure = ass.measure
-			series = ass.series
-			for (serie in series) {
-				ser = series[serie][exp]
-				if (ser) {
-					strikes = ser.strikes
-				}
-			}
-		}
+	var series = instruments.series(ticker, exp)
+	if (!series) {
+		return res.status(404).render('error', {
+			message: 'Unknown instrument/expiry: ' + ticker + ' / ' + exp,
+			error: { status: 404 }
+		})
 	}
 
-	date = new Date(parseInt(exp) * 1000)
+	var date = new Date(parseInt(exp) * 1000)
 	var month = ('0' + (date.getMonth() + 1)).substr(-2)
 	var day = ('0' + date.getDate()).substr(-2)
 	var hours = date.getHours()
@@ -41,15 +31,16 @@ router.get('/:token/:unit/:exp', (req, res) => {
 	var seconds = date.getSeconds()
 	date = day + '.' + month + ' | ' + hours + ':' + minutes + ':' + seconds
 
-	res.render('exchange', { 
-	title: 'Crypto Assets Options Exchange',
-	ticker: ticker,
-	name: name,
-	size: size,
-	measure: measure,
-	date: date,
-	exp: exp,
-	strikes: strikes
-  })
+	res.render('exchange', {
+		title: 'Crypto Assets Options Exchange',
+		ticker: ticker,
+		name: series.name,
+		size: series.size,
+		measure: series.measure,
+		date: date,
+		exp: exp,
+		strikes: series.strikes
+	})
 })
+
 module.exports = router

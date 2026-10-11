@@ -129,11 +129,16 @@ def sendLimit(ticker, exp, strike, dude, user, type, quant, asset, price):
     else:
         return 'Failed to send Order\n'
 
-def editQuant(ticker, exp, strike, dude, id, user, type, quant, asset, price):
-    cursor = orders.update_one({'_id': id}, {'$set': {'quant': quant}}).modified_count
-    if cursor == 1:
-        inOrder(ticker, exp, strike, dude, user, type, quant, price, 'EDIT')
-        return 'Edit: ' + str(cursor) + '\n'
+def editOrder(ticker, exp, strike, dude, id, user, type, quant, asset, price):
+    # Правка только собственной заявки: фильтр по _id И user — чужие не тронуть.
+    doc = orders.find_one_and_update(
+        {'_id': id, 'user': user},
+        {'$set': {'quant': quant, 'price': price}})
+    if doc is None:
+        return None
+    inOrder(ticker, exp, strike, dude, user, type, quant, price, 'EDIT')
+    setState(ticker, exp, 'ORDER', getTime())
+    return 'Edit: User ' + str(user) + ' ' + type + ' ' + str(quant) + ' of ' + asset + ' for ' + str(price) + '\n'
 
 def removeOrder(ticker, exp, strike, dude, id, user, type, quant, asset, price):
     cursor = orders.delete_one({'_id': id}).deleted_count

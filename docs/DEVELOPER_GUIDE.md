@@ -26,8 +26,8 @@
 
 - **Юнит-тесты не пишем** и инфраструктуру под них не заводим.
 - Вместо них — **только e2e-тесты**, проверяющие систему целиком (см. §0.3).
-- Существующий `tests/mongotest.py` юнит-тестом не является (это интерактивный
-  скрипт) — см. «Известные проблемы».
+- Существующий `tools/mongotest.py` юнит-тестом не является (это интерактивный
+  деструктивный скрипт, требует флаг `--run`) — см. «Известные проблемы».
 
 ### 0.3. E2E-тесты — после каждого крупного тематического блока правок
 
@@ -130,7 +130,8 @@
 | Хранилище (история) | InfluxDB 1.x — «river» ордеров и сделок |
 | Кэш/ускорение | Memcached — цены, волатильность, теоретические цены, состояние |
 | Расчёты | numpy, scipy, pandas, matplotlib (графики) |
-| Планировщик | `schedule` (в `api/theo.py`) |
+| Планировщик | `api/theo.py` — отдельный долгоживущий сервис (`schedule`), пересчитывает PRICE/THEO/HV |
+| Оркестрация | `make up/down/logs/e2e/check` (+ `Procfile`, + compose-профиль `app` — весь стек в контейнерах) |
 
 ---
 
@@ -144,22 +145,31 @@ option-exchange/
 ├── bin/www                    # Точка входа Node: создание HTTP(S)-сервера, порты
 ├── package.json               # Зависимости Node (версии зафиксированы: Express 4.x, см. §9)
 ├── requirements.txt           # Зависимости Python-API (в т.ч. python-dotenv, ecdsa)
-├── docker-compose.yml         # Mongo + Memcached + InfluxDB 1.8 одной командой
+├── Makefile                   # make up/down/logs/e2e/check/docker-* (задача #21)
+├── Procfile                   # процессы api/theo/web для process-manager'ов (#21)
+├── docker-compose.yml         # хранилища; профиль «app» — весь стек в контейнерах
+├── .dockerignore              # не тащить в образы .env/node_modules/... (#21)
 ├── docker/
-│   └── influx-init.iql        # Автосоздание баз orders/trades/spot (init-скрипт InfluxDB)
+│   ├── influx-init.iql        # Автосоздание баз orders/trades/spot (init-скрипт InfluxDB)
+│   ├── api.Dockerfile         # образ Python API + планировщик (профиль «app»)
+│   └── web.Dockerfile         # образ Node-веба (профиль «app»)
 ├── .env.example / .env        # Конфиг (.env не коммитится) — см. §7
 ├── nodemon.json               # Настройки nodemon (dev-режим)
-├── README.md                  # 2 строки описания архитектуры
-├── LICENCE                    # GPLv3 (планируется смена на MIT)
+├── README.md                  # назначение, схема, формат asset, запуск (задача #20)
+├── LICENCE                    # GPLv3 (планируется смена на MIT, задача #28)
 ├── .gitignore                 # игнорирует node_modules/, public/img/, _cache/, .env, *.css ...
-├── docs/                      # SPEC.md (ТЗ), DEVELOPER_GUIDE.md, RUNBOOK.md, DONE.md (журнал работ)
+├── docs/                      # SPEC.md (ТЗ), DEVELOPER_GUIDE.md, RUNBOOK.md, DONE.md, screenshot.png
 │
 ├── routes/                    # Express-роутеры (веб-страницы)
 │   ├── index.js               #   GET /                 → лендинг
 │   ├── exchange.js            #   GET /exchange/...     → торговый стол (desk)
 │   ├── info.js                #   GET /info/...         → графики/аналитика
 │   ├── about.js               #   GET /about/...        → about/faq/ico/roadmap
-│   └── seed.js                #   GET /seed             → генератор «seed»-фраз
+│   ├── seed.js                #   GET /seed             → генератор «seed»-фраз
+│   └── health.js              #   GET /health           → healthcheck веб-слоя (#24)
+│
+├── lib/                       # сервисы веб-слоя (логика без HTTP)
+│   └── instruments.js         #   разбор exchange/instruments.json (#23)
 │
 ├── views/                     # Pug-шаблоны
 │   ├── layout.pug             #   общий каркас (header/меню/footer, подключение CSS/JS)
@@ -185,10 +195,11 @@ option-exchange/
 │
 ├── api/                       # Python API-сервер (Bottle)
 │   ├── app.py                 # ! Точка входа API: все маршруты, бутстрап кэша
-│   ├── theo.py                # Планировщик: periodic пересчёт цены/волатильности/theo
+│   ├── theo.py                # Планировщик (отдельный сервис): PRICE/THEO/HV, пересборка кэша
 │   ├── inc/                   # Ядро (бизнес-логика)
 │   │   ├── settings.py        #   Конфиг из .env + подключения Mongo/Influx/Memcached
 │   │   ├── utils.py           #   splitAsset, hashUser, hashPassword/verifyPassword, checkHMAC, getTime
+│   │   ├── errors.py          #   ExchangeError — доменная ошибка с HTTP-кодом (единый формат)
 │   │   ├── calculation.py     #   Блэк–Шоулз (theo)
 │   │   ├── mc.py              #   Схема ключей Memcached + расчёт PRICE/HV/THEO/BEST/LAST
 │   │   ├── orders.py          #   CRUD ордеров, стакан, лучшая цена, постановка лимитки
@@ -196,18 +207,18 @@ option-exchange/
 │   │   ├── trade.py           # ! Ядро матчинга ордеров (sendOrder)
 │   │   ├── users.py           #   Балансы, залоченные средства, realised P/L, клиринг
 │   │   ├── influx.py          #   Запись/чтение «river» в InfluxDB
+│   │   ├── state.py           #   Сборка рыночных ответов /state /best /last /theo (#23)
 │   │   └── address.py         # ⚠ CLI генерации BTC/ETH-ключей. НЕ импортируется приложением
 │   ├── utils/                 # Служебные скрипты, запускаются вручную
 │   │   ├── get.py             #   загрузка истории сделок (был Poloniex)
-│   │   ├── robo.py            #   загрузка цены/свечей + генерация PNG-графиков
-│   │   ├── trader.py          #   стресс-тест: бот, льёт ордера через API
-│   │   ├── strikes.py         #   генератор списка страйков (черновик)
-│   │   └── memcache.py        # ⚠ вендорная копия python-memcached (фактически не используется)
+│   │   └── robo.py            #   загрузка цены/свечей + генерация PNG-графиков
 │   └── views/
 │       └── clear.tpl          #   HTML-шаблон отчёта по клирингу (/admin/clear)
 │
+├── tools/                     # ручные опасные инструменты (не автотесты)
+│   └── mongotest.py           # ⚠ интерактивный скрипт, бьёт по реальной БД/API (задача #22)
+│
 ├── tests/
-│   ├── mongotest.py           # ⚠ не тест: интерактивный скрипт, бьёт по реальной БД/API
 │   └── e2e.py                 # ✅ общий e2e-тест (см. §0.3.1) — дополнять при правках
 │
 ├── _cache/                    # (gitignore) цены/волатильность, читаются setPrice()/setHV()
@@ -246,14 +257,15 @@ option-exchange/
                                                     │orders/  │ │       │ │theo/     │
                                                     │contracts│ │       │ │state)    │
                                                     └─────────┘ └───────┘ └──────────┘
-                                                         ▲
-                                                         │
-                                              ┌──────────┴───────────┐
-                                              │  api/theo.py         │
-                                              │  планировщик (крон)  │
-                                              │  + api/utils/robo.py │
-                                              │  (цена/HV/графики)   │
-                                              └──────────────────────┘
+                                                         ▲                    ▲
+                                                         │                    │
+                                              ┌──────────┴────────────────────┴──┐
+                                              │  api/theo.py                      │
+                                              │  планировщик (отдельный сервис)   │
+                                              │  PRICE/THEO (1 мин), HV (15 мин), │
+                                              │  пересборка кэша при старте (#19) │
+                                              │  + api/utils/robo.py (графики)    │
+                                              └───────────────────────────────────┘
 ```
 
 ### 3.3 Кто за что отвечает (по файлам)
@@ -261,10 +273,24 @@ option-exchange/
 - **`app.js` / `bin/www`** — только веб-слой. `bin/www` создаёт HTTP(S)-сервер;
   в `production` дополнительно слушает 80 и редиректит на HTTPS, читает TLS-сертификаты
   Let's Encrypt из `/etc/letsencrypt/live/yzoz.com/`.
-- **`routes/exchange.js`** — читает `exchange/instruments.json`, находит по
+- **`routes/exchange.js`** — читает каталог через сервис `lib/instruments.js`
+  (разбор `exchange/instruments.json` вынесен из роута, задача #23), находит по
   `token/unit/exp` нужную серию и её страйки, рендерит `views/exchange.pug`.
-- **`api/app.py`** — все REST-маршруты, при старте **один раз** строит каталог активов
-  из `instruments.json` и прогревает Memcached (`setPrice/setHV/setLast/setBest/setTheo`).
+- **`lib/instruments.js`** — сервис каталога инструментов веб-слоя:
+  `load`/`instrument`/`firstExp`/`series`. Путь к файлу — от корня репозитория.
+- **`api/inc/state.py`** — сборка производных рыночных ответов API (`/state`,
+  `/best`, `/last`, `/theo`) из Memcached-ключей и каталога (#23). Соединений не
+  держит: каталог и getter передаются аргументами.
+- **`routes/health.js`** — healthcheck веб-слоя (`GET /health`, задача #24):
+  опрашивает API-`/health` и отдаёт `{"status", "web", "api"}`.
+- **`api/app.py`** — все REST-маршруты. При старте **один раз** строит каталог
+  активов через `inc/mc.py:loadCatalog()` и вызывает `rebuildCache()` — пересборку
+  `PRICE/HV/LAST/BEST/THEO` из Bybit и Mongo (задача #19; Memcached не переживает
+  рестарт сервисов).
+- **`api/theo.py`** — планировщик как **отдельный сервис** (задача #18): раз в
+  минуту `setCurrent`+`setTheo`, раз в 15 минут `setHV`, при старте —
+  `loadCatalog()`+`rebuildCache()`. Режим `--once` — разовый пересчёт. Общий
+  Memcached с API.
 - **`api/inc/trade.py`** — «мозг» биржи: `sendOrder()` решает, лимитка это или матч,
   и вызывает `makeDeal`/`removeOrder`/`editQuant`.
 - **`api/inc/users.py`** — расчёт балансов: собственные средства, залоченные под
@@ -280,12 +306,12 @@ option-exchange/
 
 ```
 TICKER  _  EXP       _  STRIKE  _  TYPE
-ETH_BTC  _  1519862400 _  100000  _  C
+ETH_BTC  _  1793491200 _  50000  _  C
  └─база └───unit      └─ unix-время экспирации (сек)
                                   └─ C = Call, P = Put
 ```
 
-Например: `ETH_BTC_1519862400_100000_C`. Разбор выполняет `inc/utils.py:splitAsset()`.
+Например: `ETH_BTC_1793491200_50000_C`. Разбор выполняет `inc/utils.py:splitAsset()`.
 
 ### 4.2 Инструменты (`exchange/instruments.json`)
 
@@ -295,15 +321,18 @@ ETH_BTC  _  1519862400 _  100000  _  C
     "name": "Ethereum/Bitcoin",
     "size": "1 Wei",
     "measure": "1 Satoshi",
-    "series": [{ "1519862400": { "strikes": [200000, 190000, ...] } }]
+    "series": [{ "1793491200": { "strikes": [60000, 55000, 50000, ...] } }]
   }
 }]
 ```
 
 - Одна серия = один момент экспирации (`exp`).
-- Сейчас в файле ровно **одна** серия с `exp = 1519862400` = **март 2018** (в прошлом).
+- Задача ТЗ **#17** регенерировала серии: сейчас их **три, в будущем** (ноябрь и
+  декабрь 2026, январь 2027), страйки `10000…60000` с шагом 5000 вокруг текущей
+  цены ETH/BTC (~30000 Satoshi). Раньше была единственная истёкшая серия
+  `1519862400` (март 2018).
 - При старте API из этого файла разворачивается полный список активов
-  (для каждого страйка — Call и Put).
+  (для каждого страйка — Call и Put) через `inc/mc.py:loadCatalog()`.
 
 ### 4.3 Единицы измерения
 
@@ -343,7 +372,10 @@ ETH_BTC  _  1519862400 _  100000  _  C
 | `<TICKER>_SERIES`, `<TICKER>_<EXP>_STRIKES` | серии и страйки тикера |
 
 > ⚠ Memcached здесь — **не только кэш**, но и единственный источник истины для
-> `BEST_*`, `THEO_*`, `LAST_*`. После рестарта без пересчёта эти данные теряются.
+> `BEST_*`, `THEO_*`, `LAST_*`. После рестарта эти данные теряются, поэтому
+> `rebuildCache()` (`api/inc/mc.py`) пересобирает их при старте API и планировщика
+> (задача #19): `PRICE/HV` заново берутся с Bybit, `LAST` — из Mongo `contracts`,
+> `BEST` — из Mongo `orders`, `THEO` пересчитывается из `PRICE`/`HV`.
 
 ---
 
@@ -404,7 +436,10 @@ PBKDF2, затем `checkHMAC(password, question, hmac)` (Python `hmac` + `sha3_
 ### 5.5 Теоретическая цена
 
 `inc/calculation.py` — Блэк–Шоулз без ставки (r = 0). Пересчитывается планировщиком
-`api/theo.py` раз в минуту (`setCurrent` → `setTheo`) и раз в 15 минут (`setHV`).
+`api/theo.py` (отдельный сервис): раз в минуту (`setCurrent` → `setTheo`) и раз в
+15 минут (`setHV`). При старте планировщик и API пересобирают кэш целиком
+(`rebuildCache()`), поэтому свежий старт сразу отдаёт актуальные `THEO/BEST/LAST`
+(задачи #18, #19).
 
 ---
 
@@ -415,8 +450,8 @@ PBKDF2, затем `checkHMAC(password, question, hmac)` (Python `hmac` + `sha3_
 | Метод | Путь | Описание |
 |---|---|---|
 | GET | `/` | Лендинг |
-| GET | `/exchange/` | Редирект на `/exchange/eth/btc/1519862400` |
-| GET | `/exchange/:token/:unit/:exp` | Торговый стол (стакан, форма ордера) |
+| GET | `/exchange/` | Редирект на `/exchange/eth/btc/<первая серия из instruments.json>` (задача #17 — больше не зашитый `1519862400`) |
+| GET | `/exchange/:token/:unit/:exp` | Торговый стол (стакан, форма ордера); неизвестный `exp` → 404 |
 | GET | `/info/` | Редирект на `/info/eth/btc/` |
 | GET | `/info/eth/btc/` | Сводка графиков |
 | GET | `/info/ac/:token/:unit[/:period]` | Accumulation/Distribution (период по умолчанию `week`) |
@@ -424,6 +459,7 @@ PBKDF2, затем `checkHMAC(password, question, hmac)` (Python `hmac` + `sha3_
 | GET | `/info/volatility/:token/:unit[/:period]` | Историческая волатильность (по умолчанию `7`) |
 | GET | `/about/`, `/about/faq/`, `/about/ico/`, `/about/roadmap/` | Инфостраницы |
 | GET | `/seed` | Случайная seed-фраза (текст) |
+| GET | `/health` | Healthcheck веб-слоя: `{"status", "web", "api"}`; всегда `200` (задача #24) |
 
 ### 6.2 API-маршруты (Bottle, `api/app.py`)
 
@@ -441,6 +477,7 @@ PBKDF2, затем `checkHMAC(password, question, hmac)` (Python `hmac` + `sha3_
 | GET | `/river/orders/<ticker>/<exp>` | Лента последних ордеров (InfluxDB) |
 | GET | `/river/trades/<ticker>/<exp>` | Лента последних сделок (InfluxDB) |
 | GET | `/saldo` | Агрегат по контрактам |
+| GET | `/health` | Состояние API и хранилищ (всегда `200`; `status`: `ok`/`degraded`) — задачи #24/#25 |
 
 **Требуют HMAC-подписи:**
 
@@ -451,11 +488,33 @@ PBKDF2, затем `checkHMAC(password, question, hmac)` (Python `hmac` + `sha3_
 | POST | `/order` | `{user, password, hmac, question:{action:'send'\|'remove'\|'edit', ...}}` |
 
 > HMAC считается по **паролю** (не по seed). Пароль передаётся в теле каждого
-> запроса. `edit` пока возвращает `501` (задача ТЗ #14).
+> запроса.
+>
+> **Единый формат ошибок (задача #16).** Любая ошибка API отдаётся настоящим
+> HTTP-кодом (`400`/`401`/`404`/`409`/`429`/`5xx`) и телом
+> `{"error": {"code": <int>, "message": <str>}}` — обработчик `@bottle.error`
+> в `api/app.py`. Доменные ошибки из `inc/*` — через `inc/errors.py:ExchangeError`
+> (например, нехватка средств → `400`).
+>
+> **Правка/снятие заявки (`/order`).** `remove` подписывается `'remove' + id`;
+> `edit` — `'edit' + id + quant + price` (значения меняются, поэтому входят в
+> подпись). Менять/снимать можно только **свою** заявку: чужая/несуществующая →
+> `404`. `edit` выполняется под `tickerLock`, чтобы не гоняться с матчингом.
 >
 > `/signup`, `/user`, `/order` защищены **per-IP rate-limit** (задача #11):
 > при превышении `RATE_MAX` за `RATE_WINDOW` секунд → **HTTP 429**. Настройки —
 > `RATE_LIMIT`/`RATE_WINDOW`/`RATE_MAX` в `.env`; `api/inc/utils.py:rateAllow()`.
+>
+> **Graceful-поведение при недоступных хранилищах (задача #25).** Импорт
+> `api/app.py` больше не падает, если Mongo/Influx/Memcached не подняты:
+> `MongoClient`/`InfluxDBClient`/Memcached-клиент — ленивые, bootstrap
+> (`loadCatalog`/`rebuildCache`) перехватывает ошибки. Чувствительные роуты
+> (`/signup`, `/user`, `/order`, `/saldo`, `/orders`, `/river/*`) проверяют
+> хранилища (`storageGuard`) и при недоступности отвечают **503**
+> `{"error":{"code":503,...}}`; ошибки драйверов на горячем пути превращает в
+> `503` декоратор `storageSafe`. Состояние видно в `GET /health`. Проверка
+> кэшируется на `STORAGE_PROBE_TTL` секунд (см. `.env.example`), таймауты — `MONGO_SELECT_TIMEOUT`
+> и `INFLUX_TIMEOUT`. Планировщик `api/theo.py` при ошибке тика не умирает.
 
 **Админский (⚠ требует `ADMIN_TOKEN`):**
 
@@ -471,7 +530,12 @@ PBKDF2, затем `checkHMAC(password, question, hmac)` (Python `hmac` + `sha3_
 > `docs/RUNBOOK.md`. Ниже — только суть; при расхождении ориентируйтесь на RUNBOOK
 > и код.
 
-Конфиг — в `.env` (скопировать из `.env.example`). Ключевые моменты:
+Конфиг — в `.env` (скопировать из `.env.example`). **Самый короткий путь (задача
+#21)** — `make up`: поднимает хранилища (`docker compose`), API, планировщик и веб;
+`make e2e` — проверка; `make down` — остановка; `make help` — все цели. То же
+самое в контейнерах — `make docker-up` (compose-профиль `app`).
+
+Вручную (эквивалент `make up`):
 
 1. **Хранилища:** `cp .env.example .env && docker compose up -d` (Mongo, Memcached,
    InfluxDB **1.8**). Базы InfluxDB `orders`/`trades`/`spot` создаются init-скриптом
@@ -482,8 +546,11 @@ PBKDF2, затем `checkHMAC(password, question, hmac)` (Python `hmac` + `sha3_
    с **Bybit** public API. API не падает без `_cache`.
 3. **Python:** `pip install -r requirements.txt`, затем `PY_MODE=dev python api/app.py`
    (слушает `API_HOST`:`API_PORT`, по умолчанию `0.0.0.0:6969` — root не нужен).
-4. **Node:** `npm install && node ./bin/www` (порт `WEB_PORT`, dev-дефолт 3000).
-5. **Проверка:** `.venv/bin/python tests/e2e.py` — сквозной e2e-тест (§0.3.1).
+4. **Планировщик (отдельный сервис):** `PY_MODE=dev python api/theo.py` — обновляет
+   `PRICE/THEO` (1 мин) и `HV` (15 мин), при старте пересобирает кэш (#18/#19).
+   Не обязателен для запуска API, но без него цены/тео не обновляются во времени.
+5. **Node:** `npm install && node ./bin/www` (порт `WEB_PORT`, dev-дефолт 3000).
+6. **Проверка:** `make e2e` или `.venv/bin/python tests/e2e.py` — сквозной e2e-тест (§0.3.1).
 
 ### Карта портов и адресов
 
@@ -495,9 +562,56 @@ PBKDF2, затем `checkHMAC(password, question, hmac)` (Python `hmac` + `sha3_
 | InfluxDB | 8086 | 8086 | `.env` → `api/inc/settings.py` |
 | Memcached | 11211 | 11211 | `.env` → `api/inc/settings.py` |
 
-Адрес API для браузера берётся из `API_URL` (`.env`) и инжектится в страницу как
+Адрес API для браузера берётся из `API_URL` (.env) и инжектится в страницу как
 `window.API_SERVER` (`views/layout.pug`). Ранее он жёстко зависел от `hostname`
 в `public/javascripts/exchange.js` — это убрано.
+
+### 7.1. Запуск API/веба в фоне (важно для агентов)
+
+🪨 **Симптом.** Если запустить сервер из инструментальной оболочки агента как
+`python api/app.py &` (или `node ./bin/www &`), процесс живёт ровно до конца
+команды: оболочка завершается, дочерний процесс из её process group получает
+`SIGTERM` и умирает. В выводе это выглядит как `Killed by SIGTERM`, а затем
+`curl` отдаёт `000` / `Failed to connect`. Каждый новый агент наступает на это
+заново.
+
+**Причина.** Инструментальная оболочка убивает всю группу процессов команды при
+её завершении. `&` отвязывает только от терминала, но не от сессии/группы.
+
+**Решение — отвязать процесс от сессии и закрыть все потоки:**
+
+```bash
+# API (выполнять из корня репозитория):
+setsid nohup env PY_MODE=dev .venv/bin/python api/app.py \
+  > /tmp/opencode/oe-api.log 2>&1 < /dev/null &
+
+# Веб:
+setsid nohup node ./bin/www > /tmp/opencode/oe-web.log 2>&1 < /dev/null &
+```
+
+- `setsid` — создаёт новую сессию/группу, процесс переживает завершение оболочки
+  (это ключевое отличие от простого `&`).
+- `nohup` — игнорирует `SIGHUP` (страховка), `</dev/null` — чтобы процесс не
+  висел на stdin оболочки, `>log 2>&1` — логи в файл (`/tmp/opencode`, не в `#`
+  агента, иначе они теряются).
+- Хранилища (`docker compose up -d`) уже демонизированы — их так запускать не надо.
+
+**Проверка, что процесс жив и не в этой сессии:**
+
+```bash
+pgrep -af "api/app.py"          # должен быть PID
+curl -s -o /dev/null -w '%{http_code}\n' localhost:6969/counters/ETH_BTC   # 200
+```
+
+**Остановка / перезапуск:**
+
+```bash
+pkill -f "api/app.py"           # затем запустить снова командой выше
+```
+
+> Если `setsid` недоступен — минимально `nohup ... </dev/null >log 2>&1 &`.
+> Альтернатива для «всё сразу» — скрипт из `docs/RUNBOOK.md` §10 (он использует
+> тот же приём). Не полагайтесь на голый `&` в агентской оболочке.
 
 ---
 
@@ -540,9 +654,24 @@ PBKDF2, затем `checkHMAC(password, question, hmac)` (Python `hmac` + `sha3_
   `/signup`, `/order`, `/user` (задача #11). Ограничение: локально для процесса.
 - ✅ ~~`robo.py`/`setCurrent()` тянут мёртвый Poloniex~~ — переведены на Bybit
   public API; `_cache` стал необязательным (задача #7).
-- 🟠 **`tests/mongotest.py` — не автотест**, бьёт по реальной БД и API (общий e2e — `tests/e2e.py`, §0.3.1).
-- 🟠 **Мёртвый/опасный код**: `api/utils/memcache.py`, `api/utils/strikes.py`
-  (задача #22).
+- ✅ ~~`/saldo` суммирует строку вместо чисел~~ — исправлено (задача #13).
+- ✅ ~~`edit`-ветка `/order` возвращает 501~~ — реализована (задача #14).
+- ✅ ~~Нет валидации входов / ошибки как «200 + текст»~~ — валидация полей и
+  единый JSON-формат ошибок с настоящими HTTP-кодами (задачи #15, #16).
+- ✅ ~~Серия одна и истёкшая (март 2018)~~ — регенерированы три будущие серии со
+  страйками вокруг текущей цены (задача #17).
+- ✅ ~~Планировщик запускался вручную/неоднозначно~~ — `api/theo.py` оформлен как
+  отдельный документированный сервис (задача #18).
+- ✅ ~~После рестарта BEST/THEO/LAST «пропадают»~~ — пересборка из Bybit/Mongo при
+  старте API и планировщика (задача #19).
+- ✅ ~~`tests/mongotest.py` — не автотест~~ — перенесён в `tools/`, деструктивные
+  вызовы убраны из импорта (задача #22).
+- ✅ ~~Мёртвый/опасный код: `api/utils/memcache.py`, `api/utils/strikes.py`~~ —
+  удалены (`memcache.py` — вендорная копия библиотеки, `strikes.py` — черновик;
+  задача #22).
+- ✅ ~~После рестарта BEST/THEO/LAST «пропадают»~~ — см. #19 выше.
+- 🟠 **`api/utils/trader.py`** — CLI-нагрузчик, хардкодит прод-URL `yzoz.com:8080` и
+  устаревший формат заявок; запускать только осознанно (в рантайм не входит).
 - 🟡 **Битый ресурс** `public/stylesheets/jquery-ui.css` (в `.gitignore`, но подключается).
 
 ---

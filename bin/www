@@ -108,4 +108,8 @@ function onListening() {
     ? 'pipe ' + addr
     : 'port ' + addr.port
   debug('Listening on ' + bind)
+  // Явная строка старта (не только DEBUG): видна в логе веб-слоя без
+  // дополнительных переменных окружения — задача ТЗ #24.
+  console.log('[web] ' + app.locals.appStatus + ': слушаю http://' + host + ':' + addr.port +
+              ' | API_URL=' + (process.env.API_URL || '(не задан)'))
 }

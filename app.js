@@ -27,6 +27,7 @@ var info = require('./routes/info')
 var exchange = require('./routes/exchange')
 var about = require('./routes/about')
 var seed = require('./routes/seed')
+var health = require('./routes/health')
 
 var app = express()
 
@@ -55,6 +56,7 @@ app.use('/info', info)
 app.use('/exchange', exchange)
 app.use('/about', about)
 app.use('/seed', seed)
+app.use('/health', health)
 
 // catch 404 and forward to error handler
 app.use(function(req, res, next) {

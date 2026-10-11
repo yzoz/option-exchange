@@ -1,10 +1,29 @@
+#!/usr/bin/env python3
+"""⚠ ОПАСНЫЙ интерактивный инструмент (НЕ автотест и НЕ e2e).
+
+Это не тест: скрипт ходит в **реальную** MongoDB (`orders`) и дёргает **живой**
+API. По умолчанию он ничего не делает — нужно явно передать флаг `--run`
+(см. блок в конце файла). Фактически он:
+  * дропает коллекцию `orders` (`postOrders()`);
+  * шлёт случайные ордера на `https://api.yzoz.com:69/order` (`testOrders()`).
+
+Для регулярной проверки используйте общий e2e — `tests/e2e.py`
+(см. docs/DEVELOPER_GUIDE.md §0.3.1). Этот файл перенесён из `tests/` в `tools/`
+задачей ТЗ #22 именно потому, что он не является автотестом.
+"""
+
 from pymongo import MongoClient
 from bson.objectid import ObjectId
-import os, sys, time, random, json, math, scipy.stats, requests
+import os, sys, time, random, json, math, requests
 
 # Креды/хост — из .env через настройки API (хардкод ''/'' убран).
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'api'))
 from inc.settings import modb
+
+try:
+    import scipy.stats
+except ImportError:
+    scipy = None
 
 db = modb()
 orders = db.orders
@@ -243,15 +262,23 @@ def testOrders():
         time.sleep(1)
         i=+1
         
-#findBest('sell')
-#findBest('buy')
-#getAll('sell', '12500P')
-#getAll('buy', '12500P')
-#getLimit('sell', '12500P', 49)
-#getLimit('buy', '12500P', 7)
-#postOrders()
-testOrders()
-#print(getBestPrice('buy', '20000P'))
-#print(sendOrder('SeXxX', 3, 'sell', 1, '22500P', 12000))
-#getBestPrice(1, 'sell', '12500P')
-#getBestPrice(1, 'buy', '12500P')
+if __name__ == '__main__':
+    # Безопасный дефолт: ничего деструктивного не запускаем, пока явно не
+    # попросили `--run` (задача ТЗ #22 — раньше `testOrders()` вызывался при
+    # импорте и слал ордера на прод-API).
+    if '--run' not in sys.argv:
+        print(__doc__)
+        print('Ничего не запущено. Для старого поведения: python tools/mongotest.py --run')
+        sys.exit(0)
+    #findBest('sell')
+    #findBest('buy')
+    #getAll('sell', '12500P')
+    #getAll('buy', '12500P')
+    #getLimit('sell', '12500P', 49)
+    #getLimit('buy', '12500P', 7)
+    #postOrders()
+    testOrders()
+    #print(getBestPrice('buy', '20000P'))
+    #print(sendOrder('SeXxX', 3, 'sell', 1, '22500P', 12000))
+    #getBestPrice(1, 'sell', '12500P')
+    #getBestPrice(1, 'buy', '12500P')

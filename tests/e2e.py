@@ -9,7 +9,9 @@
 
     # 1) поднять хранилища и API
     docker compose up -d
-    PY_MODE=dev python api/app.py &          # API на :6969
+    #    (setsid/nohup — чтобы сервер пережил завершение оболочки; голый '&'
+    #     в агентской среде убивается вместе с командой, см. GUIDE §7.1)
+    setsid nohup env PY_MODE=dev python api/app.py >/tmp/opencode/oe-api.log 2>&1 </dev/null &
 
     # 2) прогнать сценарий
     .venv/bin/python tests/e2e.py
@@ -44,10 +46,17 @@ except ImportError:
     pass
 
 API = os.getenv('API_URL', 'http://localhost:6969')
+# Веб-слой (задача #24 — его /health). E2E_WEB=0 отключает проверку, если
+# тест гоняется против одного API без Node-сервера.
+WEB = os.getenv('WEB_URL', 'http://localhost:3000')
 TICKER = 'ETH_BTC'
-# Серия/страйк из exchange/instruments.json. После задачи ТЗ #17 (регенерация
-# серий) обновите ASSET на актуальную серию, иначе часть доступа отвалится.
-ASSET = 'ETH_BTC_1519862400_100000_C'
+# Серия/страйк из exchange/instruments.json. Задача ТЗ #17 регенерировала серии
+# (актуальные, в будущем) — при следующем обновлении серий синхронизируйте эти
+# константы, иначе сценарий отвалится на несуществующем активе.
+EXP = '1793491200'
+ASSET = 'ETH_BTC_%s_50000_C' % EXP
+# Отдельный страйк для сценария правки заявки, чтобы не пересекаться с матчингом.
+EDIT_ASSET = 'ETH_BTC_%s_45000_C' % EXP
 PRICE = 30000
 
 
@@ -83,6 +92,23 @@ def _post(path, payload):
         return 'HTTP %s: %s' % (e.code, e.read().decode())
 
 
+def _get(path):
+    try:
+        return urllib.request.urlopen(API + path, timeout=15).read().decode()
+    except urllib.error.HTTPError as e:
+        return 'HTTP %s: %s' % (e.code, e.read().decode())
+
+
+def _get_url(url):
+    """GET по абсолютному URL (для проверок веб-слоя, задача #24)."""
+    try:
+        return urllib.request.urlopen(url, timeout=15).read().decode()
+    except urllib.error.HTTPError as e:
+        return 'HTTP %s: %s' % (e.code, e.read().decode())
+    except urllib.error.URLError as e:
+        return 'URL ERROR: %s' % e
+
+
 def _mac(password, message):
     return hmac.new(password.encode(), message.encode(), hashlib.sha3_512).hexdigest()
 
@@ -107,6 +133,22 @@ class Client:
                                 'hmac': _mac(self.password, msg),
                                 'question': {'action': action, 'type': type,
                                              'quant': quant, 'asset': asset, 'price': price}})
+
+    def _order_raw(self, payload, msg):
+        return _post('/order', {'user': self.key, 'password': self.password,
+                                'hmac': _mac(self.password, msg),
+                                'question': payload})
+
+    def remove(self, id):
+        return self._order_raw({'action': 'remove', 'id': id}, 'remove' + str(id))
+
+    def edit(self, id, quant, price):
+        return self._order_raw({'action': 'edit', 'id': id, 'quant': quant, 'price': price},
+                               'edit' + str(id) + str(quant) + str(price))
+
+    def open_order(self):
+        docs = json.loads(self.ask('orders'))
+        return docs[0] if docs else None
 
 
 def newClient(tag):
@@ -199,6 +241,104 @@ def scenario_matching():
                                    'hmac': 'deadbeef', 'question': 'balances'}))
     check('плохой asset -> 400', '400' in b.order('buy', 1, PRICE, asset='ETH_BTC_0_0_C'))
     check('quant<=0 -> 400', '400' in b.order('buy', 0, PRICE))
+    check('недостаточно средств -> 400', '400' in a.order('sell', 999999999, PRICE))
+
+    # Задача #16: ошибки отдаются реальным HTTP-кодом и единым JSON-телом
+    # {"error": {"code", "message"}} — а не «200 + текст».
+    err = _post('/user', {})
+    check('ошибка в едином формате', '"error"' in err and '"code": 400' in err, err)
+    try:
+        req = urllib.request.Request(API + '/user', data=b'{}',
+                                     headers={'Content-Type': 'application/json'})
+        urllib.request.urlopen(req, timeout=15)
+        code = 200
+    except urllib.error.HTTPError as e:
+        code = e.code
+    check('ошибка с настоящим HTTP-кодом (не 200)', code == 400, str(code))
+
+
+def scenario_edit():
+    """Задача #14: правка лимитной заявки (edit) и её частные случаи."""
+    print('[7] Правка заявки (edit)')
+    e = newClient('E')
+    check('signup E', 'created!' in e.signup())
+    check('E sell -> лимит', 'SendLimit' in e.order('sell', 5, PRICE, asset=EDIT_ASSET))
+    order = e.open_order()
+    check('у E есть заявка 5', order is not None and order['quant'] == 5, str(order))
+
+    check('edit -> Edit', 'Edit' in e.edit(order['id'], 8, PRICE + 1000), e.edit(order['id'], 8, PRICE + 1000))
+    order = e.open_order()
+    check('quant изменён на 8', order['quant'] == 8, str(order))
+    check('price изменён', order['price'] == PRICE + 1000, str(order))
+
+    check('edit quant<=0 -> 400', '400' in e.edit(order['id'], 0, PRICE))
+    check('edit несуществующей -> 404',
+          '404' in e.edit('000000000000000000000000', 1, PRICE))
+    check('remove своей заявки', 'Remove' in e.remove(order['id']))
+    check('после remove заявок нет', e.open_order() is None)
+
+    # Чужой не может править/снимать заявку (задача #15/#16 — 404, не 500).
+    f = newClient('F')
+    f.signup()
+    check('F sell -> лимит', 'SendLimit' in f.order('sell', 3, PRICE, asset=EDIT_ASSET))
+    forder = f.open_order()
+    check('edit чужой заявки -> 404', '404' in e.edit(forder['id'], 9, PRICE))
+    check('remove чужой заявки -> 404', '404' in e.remove(forder['id']))
+
+
+def scenario_saldo():
+    """Задача #13: /saldo суммирует числа, а не строку (иначе всегда 0/пусто)."""
+    print('[8] /saldo — агрегат контрактов')
+    raw = _get('/saldo')
+    check('/saldo -> 200 JSON', raw is not None and '"quant"' in raw, str(raw))
+    if raw:
+        rows = json.loads(raw)
+        check('/saldo непустой', len(rows) >= 1 and 'quant' in rows[0], str(rows))
+
+
+def scenario_market_cache():
+    """Задачи #17/#19: актуальная серия и пересборка PRICE/HV/LAST/BEST/THEO.
+
+    API уже был перезапущен (Memcached мог быть пуст) — значит значения здесь
+    восстановлены из Bybit/Mongo, а не пережили рестарт сами по себе.
+    """
+    print('[9] Рыночный кэш (#17 серия, #19 пересборка)')
+    counters = json.loads(_get('/counters/' + TICKER))
+    check('PRICE доступен (Bybit/_cache)', counters[0]['price'] is not None, str(counters))
+    check('HV доступен (Bybit/_cache)', counters[0]['vola'] is not None, str(counters))
+
+    # LAST — цена последней сделки; сценарий [2]/[3] только что торговал ASSET,
+    # поэтому после рестарта она обязана восстановиться из Mongo-контрактов.
+    last = json.loads(_get('/last/%s/%s' % (TICKER, EXP)))
+    last_price = {row['asset']: row['last'] for row in last}.get(ASSET)
+    check('LAST восстановлен из Mongo', last_price == PRICE, str(last_price))
+
+    # THEO — все страйки актуальной серии должны быть посчитаны (> 0, не null).
+    theo = json.loads(_get('/theo/%s/%s' % (TICKER, EXP)))
+    check('THEO посчитан для серии', len(theo) > 0 and all(
+        row['theo'] is not None and row['theo'] > 0 for row in theo), str(theo[:2]))
+
+    # BEST — структура стакана для актуальной серии (значения могут быть null).
+    best = json.loads(_get('/best/%s/%s' % (TICKER, EXP)))
+    check('BEST отдаёт активы серии', len(best) > 0 and 'asset' in best[0], str(best[:1]))
+
+
+def scenario_health():
+    """Задача #24/#25: /health отвечает 200 и сообщает о хранилищах.
+
+    Проверяем контракт ответа при ЖИВОМ стеке: `status: ok` и все три
+    хранилища `ok`. Degraded-режим (503 на данных, `status: degraded`) —
+    отдельный ручной сценарий: см. docs/DONE.md (блок #20/#21/#22/#25).
+    """
+    print('[10] /health — состояние API и хранилищ')
+    raw = _get('/health')
+    check('/health -> 200 JSON', '"status"' in raw, str(raw))
+    if '"status"' in raw:
+        body = json.loads(raw)
+        check('/health status=ok', body.get('status') == 'ok', str(body))
+        storage = body.get('storage', {})
+        for name in ('mongo', 'influx', 'memcached'):
+            check('/health %s=ok' % name, storage.get(name) == 'ok', str(storage))
 
 
 def scenario_rate_limit():
@@ -220,6 +360,44 @@ def scenario_rate_limit():
     check('серия запросов -> 429', got_429)
 
 
+def scenario_market_endpoints():
+    """Задача #23: публичные рыночные роуты после выноса логики в inc/state.py.
+
+    Проверяем, что рефакторинг не сломал контракт `/state`, `/best`, `/last`,
+    `/theo` (та же структура, что и «истина» из Memcached/Mongo). Значения
+    BEST/THEO могут быть null, поэтому проверяем форму ответа и наличие
+    активов серии.
+    """
+    print('[11] Рыночные роуты после #23 (state/best/last/theo)')
+    state = json.loads(_get('/state'))
+    check('/state содержит метки серии', len(state) > 0 and any(
+        k.endswith('_TRADE') for k in state[0]), str(state[:1]))
+
+    for path in ('/best', '/last', '/theo'):
+        rows = json.loads(_get('%s/%s/%s' % (path, TICKER, EXP)))
+        check('%s отдаёт активы серии' % path, len(rows) > 0 and 'asset' in rows[0], str(rows[:1]))
+
+    theo = json.loads(_get('/theo/%s/%s' % (TICKER, EXP)))
+    check('/theo: у активов есть поле theo', all('theo' in r for r in theo), str(theo[:1]))
+
+
+def scenario_web_health():
+    """Задача #24: /health у веб-слоя (Node) — всегда 200 + JSON.
+
+    Отключается E2E_WEB=0, если Node-сервер не поднят (тест только против API).
+    """
+    if os.getenv('E2E_WEB', '1') == '0':
+        print('[12] /health веб-слоя — пропущен (E2E_WEB=0)')
+        return
+    print('[12] /health веб-слоя (#24)')
+    raw = _get_url(WEB + '/health')
+    check('web /health -> 200 JSON', '"status"' in raw, str(raw)[:120])
+    if '"status"' in raw:
+        body = json.loads(raw)
+        check('web /health status=ok', body.get('status') == 'ok', str(body))
+        check('web /health видит API', body.get('api', {}).get('status') == 'ok', str(body))
+
+
 def main():
     print('E2E против %s' % API)
     # Дождаться чистой квоты rate-лимитера: сценарий rate-limit в конце
@@ -233,6 +411,12 @@ def main():
     if reset_exchange_state():
         print('(состояние ордеров/контрактов сброшено)')
     scenario_matching()
+    scenario_edit()
+    scenario_saldo()
+    scenario_market_cache()
+    scenario_health()
+    scenario_market_endpoints()
+    scenario_web_health()
     scenario_rate_limit()
 
     print('\nИтог: %d проверок, %d провалов' % (_checks, len(_failures)))

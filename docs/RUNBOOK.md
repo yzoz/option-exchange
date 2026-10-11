@@ -1,10 +1,14 @@
 # RUNBOOK — как поднять YZoZ Option Exchange с нуля
 
-> **Статус документа.** Обновлён после Этапа 1 ТЗ (задачи 1–12): конфиг в `.env`,
-> хранилища через `docker compose`, пароль (PBKDF2) вместо seed, API на
-> `API_PORT`, фронт берёт адрес API из `API_URL`, Bybit вместо Poloniex,
-> `_cache` необязателен, зависимости Node зафиксированы (Express 4.x),
-> rate-limit на публичные входы, секреты вычищены из git-истории и ротированы.
+> **Статус документа.** Обновлён после Этапа 2 ТЗ (задачи 20–25): запуск через
+> `make up/down/logs/e2e` (+ `Procfile`, + compose-профиль `app` — весь стек в
+> контейнерах), healthcheck `/health` у API и веб-слоя, graceful-поведение при
+> недоступных хранилищах (503 вместо падения импорта), вынос логики из роутов в
+> модули-сервисы (#23), удалён мёртвый код, обновлён `README`.
+> Ранее (Этап 1, задачи 1–12): конфиг в `.env`, хранилища через `docker compose`,
+> пароль (PBKDF2) вместо seed, API на `API_PORT`, фронт берёт адрес API из
+> `API_URL`, Bybit вместо Poloniex, `_cache` необязателен, зависимости Node
+> зафиксированы (Express 4.x), rate-limit, секреты вычищены из git-истории.
 > Исторические детали прежнего запуска (ручной
 > `docker run`, патч `theo()`, раннер `/tmp`, правка JS на порт 69) больше не
 > нужны — они остались в git-истории. См. также `docs/DONE.md` (что сделано) и
@@ -20,21 +24,25 @@
 ```bash
 cd option-exchange
 cp .env.example .env
+make up                                   # хранилища + API + theo + веб (задача #21)
+make e2e                                  # сквозной сценарий
+open http://localhost:3000/exchange/      # HV/Price должны заполниться (Bybit)
+```
 
-# 1. Хранилища (Mongo + Memcached + InfluxDB 1.8), базы Influx создаются сами
-docker compose up -d
+`make up` поднимает Mongo/Memcached/InfluxDB (Docker), Python API, планировщик
+`api/theo.py` и Node-веб локальными процессами; `make down` их останавливает,
+`make logs` показывает логи, `make help` — все цели. Весь стек в контейнерах:
+`make docker-up` (compose-профиль `app`).
 
-# 2. Python-окружение и API (порт 6969 — не привилегированный, root не нужен)
+Эквивалент вручную:
+
+```bash
+docker compose up -d                      # 1. хранилища (Influx-базы создаются сами)
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-PY_MODE=dev python api/app.py &          # API  → http://localhost:6969
-
-# 3. Веб-слой Node/Express
-npm install
-node ./bin/www &                          # веб  → http://localhost:3000
-
-# 4. Проверка
-open http://localhost:3000/exchange/      # HV/Price должны заполниться (Bybit)
+PY_MODE=dev python api/app.py &           # 2. API  → http://localhost:6969
+PY_MODE=dev python api/theo.py &          #    планировщик PRICE/THEO/HV
+npm install && node ./bin/www &           # 3. веб  → http://localhost:3000
 ```
 
 Ни `_cache`, ни ручной `CREATE DATABASE`, ни патч `calculation.py` больше не нужны.
@@ -168,8 +176,9 @@ done
 сама проверяет `S/K/V/T > 0` и возвращает внутреннюю стоимость для истёкших серий.
 Никаких ручных правок перед запуском не требуется.
 
-> Серии в `exchange/instruments.json` по-прежнему истекшие — актуализация
-> запланирована задачей ТЗ **#17** (тогда `theo()` вернётся к модели Блэка–Шоулза).
+> Серии в `exchange/instruments.json` обновлены задачей ТЗ **#17** — теперь это
+> **будущие** серии (ноябрь/декабрь 2026, январь 2027), поэтому `theo()` считает
+> по модели Блэка–Шоулза, а не в intrinsic-режиме.
 
 ---
 
@@ -192,10 +201,11 @@ curl -s localhost:6969/counters/ETH_BTC      # → [{"price": ..., "vola": ...}]
 🪨 **Зависимости зафиксированы** в `requirements.txt` (в т.ч. `python-dotenv`).
 Отдельно ставить `"pymongo<4"`/`python-memcached` вручную больше не нужно — они
 там есть.
-🪨 `python-memcached` даёт модуль `memcache` (не `pymemcache`).
-🪨 `api/utils/memcache.py` — вендорная копия библиотеки, **не используйте её**.
+🪨 `python-memcached` даёт модуль `memcache` (не `pymemcache`); вендорная копия
+`api/utils/memcache.py` удалена (задача #22).
 🪨 Запускайте из **корня репозитория** (как выше), чтобы `.env`, `exchange/` и
 `_cache/` находились по абсолютным путям из `settings.py`.
+🪨 `api/utils/trader.py` — ручной нагрузчик, хардкодит прод-URL; в запуск не входит.
 
 ---
 
@@ -209,6 +219,23 @@ PY_MODE=dev python api/app.py
 ```
 
 Любое другое значение `PY_MODE` отдаёт WSGI-приложение (прод/Gunicorn).
+
+**Планировщик рыночных расчётов (`api/theo.py`, задача #18).** Отдельный
+долгоживущий процесс: раз в минуту обновляет `PRICE`/`THEO`, раз в 15 минут —
+`HV`, а при старте пересобирает `PRICE/HV/LAST/BEST/THEO` из Bybit и Mongo
+(задача #19). API и планировщик не зависят друг от друга, но **требуют общего
+Memcached**:
+
+```bash
+setsid nohup env PY_MODE=dev python api/theo.py >/tmp/opencode/oe-theo.log 2>&1 </dev/null &
+# разовый пересчёт (без цикла) — отладка:
+PY_MODE=dev python api/theo.py --once
+```
+
+> 🪨 **Запуск в фоне (агенты).** Голый `&` в инструментальной оболочке убивает
+> сервер вместе с командой (`Killed by SIGTERM`). Отвязывайте процесс:
+> `setsid nohup env PY_MODE=dev python api/app.py >/tmp/oe-api.log 2>&1 </dev/null &`.
+> Подробно — `docs/DEVELOPER_GUIDE.md` §7.1.
 
 **Веб (Node/Express).** Порт берётся из `WEB_PORT` (dev-дефолт 3000):
 
@@ -239,6 +266,20 @@ node ./bin/www
 Проверяет регистрацию, балансы, частичный/полный матчинг, атомарность при
 параллельных ордерах и негативные ответы (401/400). Завершается кодом `1` при
 провале. См. `docs/DEVELOPER_GUIDE.md` §0.3.1 — тест нужно дополнять при правках.
+
+### Healthcheck API
+
+```bash
+curl -s localhost:6969/health     # API + хранилища
+curl -s localhost:3000/health     # веб-слой + API (задача #24)
+```
+
+Всегда отвечает `200` (процесс жив). В теле — `status` (`ok`/`degraded`),
+состояние каждого хранилища (`mongo`/`influx`/`memcached`) и число инструментов.
+При недоступном хранилище API поднимается в **degraded**-режиме: данные-запросы
+(`/signup`, `/user`, `/order`, `/saldo`, `/orders`, `/river/*`) отвечают **HTTP
+503** с понятным JSON, а не падают. Проверка кэшируется на `STORAGE_PROBE_TTL`
+сек; таймауты — `MONGO_SELECT_TIMEOUT`, `INFLUX_TIMEOUT`.
 
 ### В браузере
 
@@ -292,12 +333,20 @@ print(post('/user', {'user': KEY, 'password': PW, 'hmac': mac('balances'),
 | `docker: permission denied` | нет прав на docker | добавить пользователя в группу `docker` |
 | Графики 404 на `/info/*` | `public/img/*` не сгенерированы | нормально (ТЗ #32) |
 | `jquery-ui.css` 404 | файл в `.gitignore` | нормально (ТЗ #33) |
+| Стол открылся, но **BEST/THEO/LAST пустые**, при живом `PRICE`/`HV` | API перезапущен на «холодном» Memcached (кэш не переживает рестарт) | перезапустить API (пересборка при старте, #19) или запустить `api/theo.py` |
+| `/exchange/` редиректит на неизвестную серию / 404 на столе | серия из `instruments.json` устарела | обновить серии (#17) и перезапустить веб-слой |
+| Стол открылся, но **PRICE = null** | нет `_cache` и нет доступа к Bybit | проверить сеть (§4) |
 | `/user`, `/order`, `/signup` → **HTTP 429** | сработал rate-limit | подождать `RATE_WINDOW` или поднять `RATE_MAX` / `RATE_LIMIT=0` |
 | Ордер → **500** сразу после чистой установки Memcached | устаревший код: `currencys` читался на импорте | исправлено (ленивый `_currencys()`); обновите код |
+| API стартует, но данные-роуты → **503**, `/health` → `degraded` | недоступно хранилище (Mongo/Influx/Memcached) | `docker compose up -d`, проверить `GET /health`; см. §2 |
+| API **не стартует** при выключенных хранилищах | устаревший код (падал импорт) | исправлено (задача #25): стартует в degraded; обновите код |
 
 ---
 
 ## 10. Сценарий «одной командой» (для копипаста)
+
+То же делает `make up` (см. TL;DR) — скрипт ниже полезен, если `make` недоступен
+или нужен явный контроль над каждым шагом.
 
 ```bash
 set -e
@@ -312,18 +361,23 @@ source .venv/bin/activate
 pip -q install -r requirements.txt
 [ -d node_modules ] || npm install
 
-PY_MODE=dev python api/app.py >/tmp/oe-api.log 2>&1 &
-node ./bin/www >/tmp/oe-web.log 2>&1 &
+setsid nohup env PY_MODE=dev python api/app.py >/tmp/oe-api.log 2>&1 </dev/null &
+setsid nohup env PY_MODE=dev python api/theo.py >/tmp/oe-theo.log 2>&1 </dev/null &
+setsid nohup node ./bin/www >/tmp/oe-web.log 2>&1 </dev/null &
 sleep 8
 
 .venv/bin/python tests/e2e.py
 echo "веб: http://localhost:3000/exchange/   api: http://localhost:6969/"
 ```
 
+> 🪨 `setsid ... &` (а не голый `&`) — чтобы серверы пережили завершение
+> оболочки. В агентской среде простой `&` убивается вместе с командой
+> (`Killed by SIGTERM`). Подробно — `docs/DEVELOPER_GUIDE.md` §7.1.
+
 Остановка:
 
 ```bash
-kill %1 %2 2>/dev/null; docker compose stop
+pkill -f "api/app.py"; pkill -f "api/theo.py"; pkill -f "bin/www"; docker compose stop
 ```
 
 Сброс данных (если нужно с нуля):
@@ -371,5 +425,4 @@ cd api && python utils/robo.py
 - `"latest"` в `package.json` → фиксированные версии Express 4.x (#9);
 - креды `ad`/`pass` в коде/истории → `.env` + ротация + чистка истории (#12).
 
-Осталось из ТЗ: **#17** (актуальные серии), **#32** (графики), Этап 2 (P1) и
-Этап 3 (P2). Полный список — `docs/SPEC.md`.
+Осталось из ТЗ: **#26–#36** (Этап 3 P2). Полный список — `docs/SPEC.md`.

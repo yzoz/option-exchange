@@ -1,5 +1,5 @@
-import requests, time, os, math
-from .settings import memdb, modb, CACHE_DIR
+import requests, time, os, math, json
+from .settings import memdb, modb, CACHE_DIR, INSTRUMENTS
 from .calculation import Calculation
 
 calc = Calculation()
@@ -7,13 +7,46 @@ mc = memdb()
 contracts = modb().contracts
 orders = modb().orders
 
+
+def _mcSet(key, value):
+    """Записать значение в Memcached, не падая при недоступном Memcached.
+
+    Memcached — кэш: его недоступность не должна валить API (задача ТЗ #25).
+    """
+    try:
+        return mc.set(key, value)
+    except Exception:
+        # Хранилище недоступно — значение просто не кэшируется. Состояние
+        # восстановит rebuildCache()/планировщик, когда Memcached вернётся.
+        return 0
+
+
+def _mcDelete(key):
+    """Удалить ключ Memcached, не падая при недоступном хранилище."""
+    try:
+        return mc.delete(key)
+    except Exception:
+        return 0
+
+
+def _mcGet(key):
+    """Прочитать ключ Memcached, не падая при недоступном хранилище (#25).
+
+    Возвращает None, как и штатный промах кэша: вызывающий код уже умеет
+    обрабатывать отсутствие значения.
+    """
+    try:
+        return mc.get(key)
+    except Exception:
+        return None
+
 def getExp(exp):
     now = int(time.time())
     remain = (int(exp) - now) / 60 / 60 / 24 / 365
     return remain
 
 def setState(ticker, exp, type, time):
-    mc.set('STATE_' + ticker + '_' + str(exp) + '_' + type, time)
+    _mcSet('STATE_' + ticker + '_' + str(exp) + '_' + type, time)
 
 def setPrice():
     # _cache необязателен: при отсутствии файла цена берётся с Bybit.
@@ -30,7 +63,7 @@ def setPrice():
             if not result or not result.get('list'):
                 continue
             price = round(float(result['list'][0]['lastPrice']) * 1000000)
-        mc.set('PRICE_' + ticker, price)
+        _mcSet('PRICE_' + ticker, price)
 
 def setHV():
     # _cache необязателен: при отсутствии файла HV оценивается по дневным
@@ -45,7 +78,7 @@ def setHV():
             vola = bybitHV(ticker)
             if vola is None:
                 continue
-        mc.set('HV_' + ticker, vola)
+        _mcSet('HV_' + ticker, vola)
 
 def bybitHV(ticker, days=7):
     # Годовая историческая волатильность по дневным закрытиям (interval=D).
@@ -66,38 +99,93 @@ def bybitHV(ticker, days=7):
     return round(math.sqrt(var) * math.sqrt(365), 5)
 
 def getCurrencys():
-    return mc.get('CURRENCYS')
+    return _mcGet('CURRENCYS')
 
 def getTickers():
-    return mc.get('TICKERS')
+    return _mcGet('TICKERS')
 
 def getAssets():
-    return mc.get('ASSETS')
+    return _mcGet('ASSETS')
 
 def getSeries(ticker):
-    return mc.get(ticker + '_SERIES')
+    return _mcGet(ticker + '_SERIES')
 
 def getStrikes(tickerSerie):
-    return mc.get(tickerSerie + '_STRIKES')
+    return _mcGet(tickerSerie + '_STRIKES')
 
 def setCurrencys(currencys):
-    return mc.set('CURRENCYS', currencys)
+    return _mcSet('CURRENCYS', currencys)
 
 def setTickers(tickers):
-    mc.set('TICKERS', tickers)
+    _mcSet('TICKERS', tickers)
 
 def setAssets(assets):
-    mc.set('ASSETS', assets)
+    _mcSet('ASSETS', assets)
 
 def setSeries(tickerSeries):
     for series in tickerSeries:
         for ticker in series:
-            mc.set(ticker + '_SERIES', series[ticker])
+            _mcSet(ticker + '_SERIES', series[ticker])
 
 def setStrikes(tickerSeriesStrikes):
     for seriesStrikes in tickerSeriesStrikes:
         for tickerSeries in seriesStrikes:
-            mc.set(tickerSeries + '_STRIKES', seriesStrikes[tickerSeries])
+            _mcSet(tickerSeries + '_STRIKES', seriesStrikes[tickerSeries])
+
+def loadCatalog():
+    """Прочитать exchange/instruments.json и разложить каталог по Memcached.
+
+    Общий bootstrap для API (api/app.py) и планировщика (api/theo.py): оба
+    процесса должны видеть актуальные тикеры/серии/страйки/активы. Возвращает
+    структуру `all` для публичного GET / (тикер → имя и серии с активами).
+
+    Не падает, если Memcached недоступен (задача ТЗ #25): каталог всё равно
+    возвращается вызывающему, а записи в Memcached молча пропускаются.
+    """
+    try:
+        with open(INSTRUMENTS) as jsonData:
+            instruments = json.load(jsonData)
+    except (OSError, ValueError) as e:
+        print('loadCatalog: не удалось прочитать %s: %s' % (INSTRUMENTS, e))
+        return []
+    allInstruments = []
+    assets = []
+    tickers = []
+    series = []
+    tickerSeries = []
+    tickerSeriesStrikes = []
+    for instrument in instruments:
+        for ticker in instrument:
+            ___series = instrument[ticker]['series']
+            name = instrument[ticker]['name']
+            tickers.append(ticker)
+            __series = []
+            _tickerSeries = []
+            for serie in ___series:
+                for exp in serie:
+                    strikes = serie[exp]['strikes']
+                    _assets = []
+                    for strike in strikes:
+                        j = 1
+                        dt = 'C'
+                        while j <= 2:
+                            option = ticker + '_' + exp + '_' + str(strike) + '_' + dt
+                            _assets.append(option)
+                            assets.append(option)
+                            dt = 'P'
+                            j += 1
+                    __series.append({exp: {'assets': _assets}})
+                    tickerSeriesStrikes.append({ticker + '_' + exp: strikes})
+                    series.append(ticker + '_' + exp)
+                    _tickerSeries.append(exp)
+        allInstruments.append({ticker: {'name': name, 'series': __series}})
+        tickerSeries.append({ticker: _tickerSeries})
+    setCurrencys(['ETH', 'BTC'])
+    setTickers(tickers)
+    setAssets(assets)
+    setSeries(tickerSeries)
+    setStrikes(tickerSeriesStrikes)
+    return allInstruments
 
 BYBIT_API = 'https://api.bybit.com/v5/market'
 
@@ -125,53 +213,76 @@ def setCurrent():
         if not result or not result.get('list'):
             continue
         last = float(result['list'][0]['lastPrice'])
-        mc.set('PRICE_' + ticker, round(last * 1000000))
+        _mcSet('PRICE_' + ticker, round(last * 1000000))
 
 def setLast():
-    cursor = contracts.aggregate([
-    {'$group': {'_id': '$asset',
-        'time': {'$max': '$time'},
-        'amount': {'$last': '$amount'},
-        'quant': {'$last': '$quant'}
-        }
-    }])
+    # LAST — цена последней сделки по активу. Memcached не переживает рестарт,
+    # поэтому восстанавливаем из Mongo (contracts) при старте. Перед пересчётом
+    # чистим прежние LAST_* по каталогу, иначе останутся ключи мёртвых активов.
+    for asset in getAssets() or []:
+        _mcDelete('LAST_' + asset)
+    # Mongo может быть недоступен — LAST останется не восстановленным, но это
+    # не должно валить bootstrap API (задача ТЗ #25).
+    try:
+        # $sort по времени до $group — иначе $last берёт произвольный документ.
+        cursor = contracts.aggregate([
+        {'$sort': {'time': 1}},
+        {'$group': {'_id': '$asset',
+            'time': {'$max': '$time'},
+            'amount': {'$last': '$amount'},
+            'quant': {'$last': '$quant'}
+            }
+        }])
+    except Exception as e:
+        print('setLast: Mongo недоступен: %s' % e)
+        return
     for doc in cursor:
         # Пропускаем закрытые позиции (quant == 0) — иначе деление на ноль.
         if not doc['quant']:
             continue
-        mc.set('LAST_' + doc['_id'], int(round(doc['amount'] / doc['quant'])))
+        _mcSet('LAST_' + doc['_id'], int(round(doc['amount'] / doc['quant'])))
 
 def upLast(asset, price):
-    mc.set('LAST_' + asset, price)
+    _mcSet('LAST_' + asset, price)
 
 def setBest():
+    # BEST — лучшая цена по активу из открытых заявок Mongo. Memcached не
+    # переживает рестарт; чистим ключи каталога и пере создаём из orders.
+    for asset in getAssets() or []:
+        _mcDelete('BEST_SELL_' + asset)
+        _mcDelete('BEST_BUY_' + asset)
     types = ['sell', 'buy']
     for type in types:
         if type == 'sell':
             dir = '$min'
         else:
             dir = '$max'
-        cursor = orders.aggregate([
-        {'$match': {'type': type}},
-        {'$group': {'_id': '$asset',
-            'price': {dir: '$price'}
-            }
-        }])
+        try:
+            cursor = orders.aggregate([
+            {'$match': {'type': type}},
+            {'$group': {'_id': '$asset',
+                'price': {dir: '$price'}
+                }
+            }])
+        except Exception as e:
+            # Mongo недоступен — BEST останется пустым, API не падает (#25).
+            print('setBest: Mongo недоступен: %s' % e)
+            return
         for doc in cursor:
-            mc.set('BEST_' + type.upper() + '_' + doc['_id'], doc['price'])
+            _mcSet('BEST_' + type.upper() + '_' + doc['_id'], doc['price'])
 
 def upBest(asset, type, price):
     key = 'BEST_' + type.upper() + '_' + asset
     if price:
-        mc.set(key, price)
+        _mcSet(key, price)
     else:
-        mc.delete(key)
+        _mcDelete(key)
 
 def setTheo():
     tickers = getTickers() or []
     for ticker in tickers:
-        V = mc.get('HV_' + ticker)
-        S = mc.get('PRICE_' + ticker)
+        V = _mcGet('HV_' + ticker)
+        S = _mcGet('PRICE_' + ticker)
         # Без цены или волатильности (нет _cache) theo не считаем: модель
         # вернула бы intrinsic-стоимость с нулевыми входами, что бессмысленно.
         if V is None or S is None:
@@ -185,6 +296,26 @@ def setTheo():
                 j = 1
                 dt = 'C'
                 while j <= 2:
-                    mc.set('THEO_' + ticker + '_' + serie + '_' + str(strike) + '_' + dt, calc.theo(S, K, V, T, dt))
+                    _mcSet('THEO_' + ticker + '_' + serie + '_' + str(strike) + '_' + dt, calc.theo(S, K, V, T, dt))
                     dt = 'P'
                     j+=1
+
+def rebuildCache():
+    """Пересобрать рыночный кэш из внешних источников и из Mongo.
+
+    Memcached — не только кэш, но и единственный источник истины для
+    PRICE/HV/LAST/BEST/THEO (см. DEVELOPER_GUIDE §4.4). После рестарта
+    Memcached эти ключи теряются, и стол «пропадает» (задача ТЗ #19). Эта
+    функция вызывается при старте API и планировщиком (api/theo.py), чтобы
+    восстановить состояние из Bybit (PRICE/HV), Mongo-контрактов (LAST),
+    Mongo-заявок (BEST) и заново посчитать THEO.
+
+    Порядок существенен: THEO зависит от PRICE и HV. Каждый шаг сам по себе
+    устойчив к недоступности своего хранилища (задача ТЗ #25), поэтому
+    недоступный Mongo/Influx/Memcached не валит здесь весь bootstrap.
+    """
+    setPrice()
+    setHV()
+    setLast()
+    setBest()
+    setTheo()

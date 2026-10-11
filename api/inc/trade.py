@@ -3,6 +3,7 @@ from .orders import alreadyOrders, getBestPrice, sendLimit, matchOrder
 from .contracts import alreadyContracts, makeDeal
 from .users import userBalances
 from .mc import upBest
+from .errors import ExchangeError
 
 # Пер-тикерные блокировки: сериализуют матчинг в рамках процесса, чтобы два
 # параллельных ордера не выкупали одну и ту же встречную заявку. Само по себе
@@ -62,7 +63,8 @@ def sendOrder(base, unit, ticker, exp, strike, dude, user, type, quant, asset, p
     with tickerLock(ticker):
         send = checkOrder(base, unit, ticker, exp, strike, dude, user, type, quant, asset, price, assets)
         if not send:
-            return 'No Money!'
+            # Недостаточно средств — доменная ошибка (роут отдаст 400 в едином формате).
+            raise ExchangeError(400, 'No Money! Not enough funds for this order')
         if type == 'sell':
             oppType = 'buy'
         else:

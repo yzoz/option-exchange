@@ -72,6 +72,20 @@ function getHMAC(question) {
     return hmac;
 }
 
+// Единый обработчик AJAX-ошибок: API отдаёт реальные HTTP-коды (задача #16),
+// поэтому неуспешный ответ нужно показать, а не молча терять.
+function showAjaxError(xhr) {
+    var msg;
+    try {
+        msg = JSON.parse(xhr.responseText).error.message;
+    } catch (e) {
+        msg = xhr.status + ' ' + (xhr.statusText || 'Error');
+    }
+    $('#log .content').html('Error: ' + msg);
+    $('#log').show();
+    $('#log').center();
+}
+
 function genKey(){
     var possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
     var mask = 'XXXXX-XXXXX-XXXXX-XXXXX-X';
@@ -110,7 +124,8 @@ function signUp() {
             $('#log .content').html(out);
             $('#log').show();
             $('#log').center();
-        }
+        },
+        error: showAjaxError
     })
 }
 
@@ -135,7 +150,7 @@ function updateBlocks() {
 
 function getCounters() {
     $.getJSON(apiServer + '/counters/' + TICKER, function(data) {
-        $('#counters').html('HV:  <a href="/info/volatility/eth/btc/">' + Number((data[0].vola * 100).toFixed(2)) + '</a> | Price: <a href="https://poloniex.com/exchange#btc_eth">' + data[0].price + '</a>');
+        $('#counters').html('HV:  <a href="/info/volatility/eth/btc/">' + Number((data[0].vola * 100).toFixed(2)) + '</a> | Price: <a href="https://www.bybit.com/spot/ETHBTC">' + data[0].price + '</a>');
     })
 }
 
@@ -195,7 +210,8 @@ function userContracts() {
                 $('#log').show();
                 $('#log').center();
             }
-        }
+        },
+        error: showAjaxError
     })
 }
 
@@ -232,7 +248,8 @@ function userBalances() {
                 $('#log').show();
                 $('#log').center();
             }
-        }
+        },
+        error: showAjaxError
     })
 }
 
@@ -257,8 +274,7 @@ function userOrders() {
                 var orders = '<table><tr><td>Date</td><td>Asset</td><td>Q</td><td>Price</td><td>Amount</td><td></td></tr>';
                 out = JSON.parse(JSON.stringify(out));
                 $.each(out, function(key, val) {
-                    order = '<tr class="' + val.type + '"><td>' + convertDate(val.time) + '</td><td>' + val.asset + '</td><td>' + + val.quant + '</td><td>' + val.price + '</td><td>' + val.price * val.quant + '</td><td><img src="/images/remove.png" alt="R" class="icon" title="Remove" onclick="orderRemove(\'' + val.id + '\')" /></td></tr>';
-                    //<img src="/images/edit.png" alt="E" class="icon" title="Edit"onclick="orderEdit(' + val.id + ')" />
+                    order = '<tr class="' + val.type + '"><td>' + convertDate(val.time) + '</td><td>' + val.asset + '</td><td>' + + val.quant + '</td><td>' + val.price + '</td><td>' + val.price * val.quant + '</td><td><img src="/images/remove.png" alt="R" class="icon" title="Remove" onclick="orderRemove(\'' + val.id + '\')" /> <img src="/images/edit.png" alt="E" class="icon" title="Edit" onclick="orderEdit(\'' + val.id + '\', ' + val.quant + ', ' + val.price + ')" /></td></tr>';
                     orders = orders + order;
                 });
                 orders = orders + '</table>';
@@ -270,7 +286,8 @@ function userOrders() {
                 $('#log').show();
                 $('#log').center();
             }
-        }
+        },
+        error: showAjaxError
     })
 }
 
@@ -313,7 +330,8 @@ function userTrades() {
                 $('#log').show();
                 $('#log').center();
             }
-        }
+        },
+        error: showAjaxError
     })
 }
 
@@ -348,7 +366,8 @@ function orderSend(type, asset) {
             $('#log').show();
             $('#log').center();
             updateBlocks();
-        }
+        },
+        error: showAjaxError
     })
 }
 
@@ -377,7 +396,45 @@ function orderRemove(id) {
             $('#log').show();
             $('#log').center();
             updateBlocks();
-        }
+        },
+        error: showAjaxError
+    })
+}
+
+function orderEdit(id, quant, price) {
+    var newQuant = prompt('New quantity:', quant);
+    if (newQuant === null) { return; }
+    var newPrice = prompt('New price:', price);
+    if (newPrice === null) { return; }
+    key = getMyKey();
+    action = 'edit';
+    question = {
+        action: action,
+        id: id,
+        quant: newQuant,
+        price: newPrice
+    };
+    // HMAC-подпись правки: action + id + quant + price (см. api/app.py).
+    toHMAC = action + id + newQuant + newPrice;
+    hmac = getHMAC(toHMAC);
+    data = {
+        'user': key,
+        'password': getMyPassword(),
+        'hmac': hmac,
+        'question': question
+    };
+    $.ajax({
+        type: 'POST',
+        url: apiServer + '/order',
+        data: JSON.stringify(data),
+        contentType: 'application/json',
+        success: function(out) {
+            $('#log .content').html(out.replace(/\n/g, '<br />'))
+            $('#log').show();
+            $('#log').center();
+            updateBlocks();
+        },
+        error: showAjaxError
     })
 }
 
